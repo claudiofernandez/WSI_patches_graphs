@@ -245,6 +245,7 @@ class WholeSlideImage(object):
         contour_holes = self.holes_tissue
 
         print("Creating patches for: ", self.name, "...",)
+        print("For contours ", len(contours))
         elapsed = time.time()
         for idx, cont in enumerate(contours):
             patch_gen = self._getPatchGenerator(cont, idx, patch_level, save_path, patch_size, step_size, **kwargs)
