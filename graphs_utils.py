@@ -2,6 +2,7 @@
 from MIL_models import *
 #from MIL_data import *
 from MIL_utils import *
+import gc
 
 
 def show_graph_igraph(G):
@@ -393,6 +394,9 @@ class imgs2graph_w_edgefeatures_norm(torch.nn.Module):
             batch_images = image_tensor_normalization(x=batch_images, input_shape=self.input_shape, channel_first=True).to('cuda')
             batch_features = self.bb(batch_images)
             features.append(batch_features)
+            del batch_images
+            del batch_features
+            gc.collect()
             torch.cuda.empty_cache()
 
         features = torch.cat(features, dim=0)
