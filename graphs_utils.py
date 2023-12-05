@@ -304,6 +304,7 @@ class Encoder(torch.nn.Module):
 
         if pretrained_fe_path is not None:  # Pretrained FEs
             if "vgg16" in self.backbone:
+                print(self.pretrained_fe_path)
                 vgg16_BM = torch.load(self.pretrained_fe_path)
                 self.F = vgg16_BM.bb
                 self.F.to('cuda')
