@@ -7,3 +7,4 @@ torch_scatter==2.1.0
 networkx==2.8.4
 h5py==3.10.0
 nmslib==2.1.1
+igraph==0.11.3
