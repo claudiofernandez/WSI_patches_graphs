@@ -61,7 +61,7 @@ def main(args):
         dir_h5s = os.path.join('/workspace/DGXFolder', args.path_to_h5files)
         feature_extractor_dir = os.path.join('/workspace/DGXFolder', args.path_to_feature_extractors_folder)
     elif args.where_exec == "dgx_gpu":
-        dir_results_save_graph = os.path.join('/workspace/exec/NASFolder/', args.feature_extractor_name[:70], args.graph_savedir)
+        dir_results_save_graph = os.path.join('/workspace/exec/NASFolder/', args.graph_savedir, args.feature_extractor_name[:70])
         dir_h5s = os.path.join("/workspace/exec/dataDGX/", args.path_to_h5files)
         feature_extractor_dir = os.path.join('/workspace/exec/NASFolder/', args.path_to_feature_extractors_folder)
     elif args.where_exec == "local":
