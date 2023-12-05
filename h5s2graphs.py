@@ -68,7 +68,7 @@ def main(args):
         feature_extractor_dir = os.path.join('C:/Users/clferma1/Documents/Investigacion_GIT', args.path_to_feature_extractors_folder)
 
 
-        print(dir_results_save_graph, dir_h5s, feature_extractor_dir)
+    print(dir_results_save_graph, dir_h5s, feature_extractor_dir)
 
     os.makedirs(dir_results_save_graph, exist_ok=True) # create output directory
 
