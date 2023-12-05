@@ -67,6 +67,9 @@ def main(args):
         dir_h5s = os.path.join('F:', args.path_to_h5files)
         feature_extractor_dir = os.path.join('C:/Users/clferma1/Documents/Investigacion_GIT', args.path_to_feature_extractors_folder)
 
+
+        print(dir_results_save_graph, dir_h5s, feature_extractor_dir)
+
     os.makedirs(dir_results_save_graph, exist_ok=True) # create output directory
 
     # Specify the path to your HDF5 file
