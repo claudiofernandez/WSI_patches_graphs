@@ -60,7 +60,7 @@ def main(args):
         feature_extractor_dir = os.path.join('/workspace/DGXFolder', args.path_to_feature_extractors_folder)
     elif args.where_exec == "dgx_gpu":
         dir_results_save_graph = os.path.join('/workspace/exec/NASFolder', args.graph_savedir)
-        dir_h5s = os.path.join('/workspace/exec/dataDGX', args.path_to_h5files)
+        dir_h5s = os.path.join("/workspace/exec/dataDGX/", args.path_to_h5files)
         feature_extractor_dir = os.path.join('/workspace/exec/NASFolder', args.path_to_feature_extractors_folder)
     elif args.where_exec == "local":
         dir_results_save_graph = os.path.join('F:', args.graph_savedir)
@@ -111,10 +111,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # General params
-    parser.add_argument('--where_exec', type=str, default="local", help="slurm_dgx, slurm_nas, dgx_gpu or local")
-    parser.add_argument('--path_to_h5files', type=str, default="/CLAUDIO/BREAST_CANCER_DATASETS/CLARIFY BREAST CANCER DATABASE NOV2023/Results CLAM/h5s/patches", help="path where h5 files are located")
-    parser.add_argument('--path_to_feature_extractors_folder', type=str, default="/Molecular_Subtype_Prediction/data/feature_extractors", help="path where feature extractors are located")
-    parser.add_argument('--graph_savedir', type=str, default="/output_graphs", help="path to save graphs folder")
+    parser.add_argument('--where_exec', type=str, default="dgx_gpu", help="slurm_dgx, slurm_nas, dgx_gpu or local")
+    parser.add_argument('--path_to_h5files', type=str, default="CLAUDIO/BREAST_CANCER_DATASETS/CLARIFY_BREAST_CANCER_DATABASE_NOV2023/Results_CLAM/h5s/patches", help="path where h5 files are located")
+    parser.add_argument('--path_to_feature_extractors_folder', type=str, default="Molecular_Subtype_Prediction/data/feature_extractors", help="path where feature extractors are located")
+    parser.add_argument('--graph_savedir', type=str, default="output_graphs", help="path to save graphs folder")
 
     # Feature extractor params
     parser.add_argument("--pred_mode", default="OTHERvsTNBC", type=str, help='Classification task')
