@@ -304,7 +304,6 @@ class Encoder(torch.nn.Module):
 
         if pretrained_fe_path is not None:  # Pretrained FEs
             if "vgg16" in self.backbone:
-                print(self.pretrained_fe_path)
                 vgg16_BM = torch.load(self.pretrained_fe_path)
                 self.F = vgg16_BM.bb
                 self.F.to('cuda')
@@ -374,7 +373,7 @@ class imgs2graph_w_edgefeatures_norm(torch.nn.Module):
 
         # Feature extractor
         if self.pretrained_fe_path is not None:
-            self.bb = Encoder(backbone=self.backbone, pretrained=self.pretrained, pretrained_fe_path=pretrained_fe_path)
+            self.bb = Encoder(backbone=self.backbone, pretrained=self.pretrained, pretrained_fe_path=self.pretrained_fe_path)
             self.bb.eval()
         else:
             self.bb = Encoder(backbone=self.backbone, pretrained=self.pretrained)
