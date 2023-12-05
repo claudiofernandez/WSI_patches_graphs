@@ -113,7 +113,7 @@ if __name__ == '__main__':
     # General params
     parser.add_argument('--where_exec', type=str, default="dgx_gpu", help="slurm_dgx, slurm_nas, dgx_gpu or local")
     parser.add_argument('--path_to_h5files', type=str, default="CLAUDIO/BREAST_CANCER_DATASETS/CLARIFY_BREAST_CANCER_DATABASE_NOV2023/Results_CLAM/h5s/patches", help="path where h5 files are located")
-    parser.add_argument('--path_to_feature_extractors_folder', type=str, default="Molecular_Subtype_Prediction/data/feature_extractors", help="path where feature extractors are located")
+    parser.add_argument('--path_to_feature_extractors_folder', type=str, default="feature_extractors", help="path where feature extractors are located")
     parser.add_argument('--graph_savedir', type=str, default="output_graphs", help="path to save graphs folder")
 
     # Feature extractor params
