@@ -48,16 +48,37 @@ def create_graph(knn_list, wsi_assets, wsi_attr, dir_results_save_graph, feature
 
 
 def main(args):
-    # Specify the path to your HDF5 file
-    #file_path = "D:/clferma1/TCGA-BRCA_H5S/patches/TCGA-A2-A3XT-01Z-00-DX1.336D6C78-576A-481B-8C83-F3A0FC4B182C.h5"
-    h5_files = os.listdir(args.dir_h5s)
 
+    # Set up directories depending on where this program is executed
+    if args.where_exec == "slurm_nas":
+        dir_results_save_graph = os.path.join('/workspace/NASFolder', args.graph_savedir)
+        dir_h5s = os.path.join('/workspace/NASFolder', args.path_to_h5files)
+        feature_extractor_dir = os.path.join('/workspace/NASFolder', args.path_to_feature_extractors_folder)
+    elif args.where_exec == "slurm_dgx":
+        dir_results_save_graph = os.path.join('/workspace/NASFolder', args.graph_savedir) # TODO: Ask Jan about both mappings NAS and DGX Folders
+        dir_h5s = os.path.join('/workspace/DGXFolder', args.path_to_h5files)
+        feature_extractor_dir = os.path.join('/workspace/DGXFolder', args.path_to_feature_extractors_folder)
+    elif args.where_exec == "dgx_gpu":
+        dir_results_save_graph = os.path.join('../output', args.graph_savedir) # TODO: Ask Jan about both mappings NAS and DGX Folders
+        dir_h5s = os.path.join('../data', args.path_to_h5files)
+        feature_extractor_dir = os.path.join('../data', args.path_to_feature_extractors_folder)
+    elif args.where_exec == "local":
+        dir_results_save_graph = os.path.join('F:', args.graph_savedir)
+        dir_h5s = os.path.join('F:', args.path_to_h5files)
+        feature_extractor_dir = os.path.join('C:/Users/clferma1/Documents/Investigacion_GIT', args.path_to_feature_extractors_folder)
+
+    os.makedirs(dir_results_save_graph, exist_ok=True) # create output directory
+
+    # Specify the path to your HDF5 file
+    h5_files = os.listdir(dir_h5s)
+
+    # Read h5 files
     for h5file in tqdm(h5_files):
         # Derive filepath
-        file_path = os.path.join(args.dir_h5s, h5file)
+        file_path = os.path.join(dir_h5s, h5file)
 
         # Directories
-        feature_extractor_path = os.path.join(args.feature_extractor_dir, args.feature_extractor_name)
+        feature_extractor_path = os.path.join(feature_extractor_dir, args.feature_extractor_name)
 
         # Record the start time
         print(f"Extracting information from h5 file " + h5file + " ...")
@@ -72,7 +93,7 @@ def main(args):
 
         # Generate graphs
         create_graph(knn_list=args.knn_list, wsi_assets=assets, wsi_attr=attr,
-                    dir_results_save_graph=args.dir_results_save_graph,
+                    dir_results_save_graph=dir_results_save_graph,
                     feature_extractor_name=args.feature_extractor_name,
                     feature_extractor_path=feature_extractor_path,
                     include_edge_features=args.include_edge_features,
@@ -86,11 +107,15 @@ if __name__ == '__main__':
     ##########################
     parser = argparse.ArgumentParser()
 
-    #TODO: Meter input shape al argparser
-
     # General params
-    parser.add_argument("--dir_results_save_graph", default="F:/CLAUDIO/BREAST_CANCER_DATASETS/CLARIFY BREAST CANCER DATABASE NOV2023/Results GRAPHS/graphs", type=str, help='Directory where graphs will be stored.')
-    parser.add_argument("--dir_h5s", default="F:/CLAUDIO/BREAST_CANCER_DATASETS/CLARIFY BREAST CANCER DATABASE NOV2023/Results CLAM/h5s/patches", type=str, help='Directory where feature extractors are stored')
+    parser.add_argument('--where_exec', type=str, default="local", help="slurm_dgx, slurm_nas, dgx_gpu or local")
+    parser.add_argument('--path_to_h5files', type=str, default="/CLAUDIO/BREAST_CANCER_DATASETS/CLARIFY BREAST CANCER DATABASE NOV2023/Results CLAM/h5s/patches", help="path where h5 files are located")
+    parser.add_argument('--path_to_feature_extractors_folder', type=str, default="/Molecular_Subtype_Prediction/data/feature_extractors", help="path where feature extractors are located")
+    parser.add_argument('--graph_savedir', type=str, default="/output_graphs", help="path to save graphs folder")
+
+    # Feature extractor params
+    parser.add_argument("--pred_mode", default="OTHERvsTNBC", type=str, help='Classification task')
+    parser.add_argument("--feature_extractor_name", default="PM_OTHERvsTNBC_BB_vgg16_AGGR_attention_LR_0.002_OPT_sgd_T_full_dataset_D_BCNB_E_100_L_cross_entropy_OWD_0_FBB_False_PT_True_MAGN_10x_N_100_Anetwork_weights_best_f1.pth", type=str, help='Chosen feature extractor.')
 
     # Graph params
     parser.add_argument("--knn_list", default=[8, 19, 25], type=list, help='KNN values for generating graphs')
@@ -98,13 +123,7 @@ if __name__ == '__main__':
     parser.add_argument("--edges_type", default="spatial", type=str, help='Type of edge: spatial/latent')
     parser.add_argument("--input_shape", default=(3, 256, 256), type=tuple, help='Input shape for the feature extractor.')
 
-    # Feature extractor params
-    parser.add_argument("--feature_extractor_dir", default="C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/feature_extractors", type=str, help='Directory where feature extractors are stored')
-    parser.add_argument("--pred_mode", default="OTHERvsTNBC", type=str, help='Classification task')
-    parser.add_argument("--feature_extractor_name", default="PM_OTHERvsTNBC_BB_vgg16_AGGR_attention_LR_0.002_OPT_sgd_T_full_dataset_D_BCNB_E_100_L_cross_entropy_OWD_0_FBB_False_PT_True_MAGN_10x_N_100_Anetwork_weights_best_f1.pth", type=str, help='Chosen feature extractor.')
-
     args = parser.parse_args()
     main(args)
-
 
 print("hola")
