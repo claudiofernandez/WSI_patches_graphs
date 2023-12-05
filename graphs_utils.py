@@ -389,14 +389,10 @@ class imgs2graph_w_edgefeatures_norm(torch.nn.Module):
         print("Extracting features from " + str(num_images) + " images for building WSI-graphs...")
         features = []
         for i in tqdm(range(0, num_images, batch_size)):
-            torch.cuda.empty_cache()
             batch_images = images[i:i + batch_size]
             batch_images = image_tensor_normalization(x=batch_images, input_shape=self.input_shape, channel_first=True).to('cuda')
             batch_features = self.bb(batch_images)
             features.append(batch_features)
-            del batch_images
-            del batch_features
-            gc.collect()
             torch.cuda.empty_cache()
 
         features = torch.cat(features, dim=0)

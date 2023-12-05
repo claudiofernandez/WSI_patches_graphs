@@ -6,6 +6,7 @@ import argparse
 import torch
 import ast
 from graphs_utils import *
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 
 
 def read_assets_from_h5(h5_path):
