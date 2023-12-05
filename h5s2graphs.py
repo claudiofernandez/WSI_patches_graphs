@@ -55,13 +55,13 @@ def main(args):
         dir_h5s = os.path.join('/workspace/NASFolder', args.path_to_h5files)
         feature_extractor_dir = os.path.join('/workspace/NASFolder', args.path_to_feature_extractors_folder)
     elif args.where_exec == "slurm_dgx":
-        dir_results_save_graph = os.path.join('/workspace/NASFolder', args.graph_savedir) # TODO: Ask Jan about both mappings NAS and DGX Folders
+        dir_results_save_graph = os.path.join('/workspace/NASFolder', args.graph_savedir)
         dir_h5s = os.path.join('/workspace/DGXFolder', args.path_to_h5files)
         feature_extractor_dir = os.path.join('/workspace/DGXFolder', args.path_to_feature_extractors_folder)
     elif args.where_exec == "dgx_gpu":
-        dir_results_save_graph = os.path.join('../output', args.graph_savedir) # TODO: Ask Jan about both mappings NAS and DGX Folders
-        dir_h5s = os.path.join('../data', args.path_to_h5files)
-        feature_extractor_dir = os.path.join('../data', args.path_to_feature_extractors_folder)
+        dir_results_save_graph = os.path.join('/workspace/exec/NASFolder', args.graph_savedir)
+        dir_h5s = os.path.join('/workspace/exec/dataDGX', args.path_to_h5files)
+        feature_extractor_dir = os.path.join('/workspace/exec/NASFolder', args.path_to_feature_extractors_folder)
     elif args.where_exec == "local":
         dir_results_save_graph = os.path.join('F:', args.graph_savedir)
         dir_h5s = os.path.join('F:', args.path_to_h5files)
