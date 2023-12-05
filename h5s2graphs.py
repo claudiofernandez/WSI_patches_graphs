@@ -59,9 +59,9 @@ def main(args):
         dir_h5s = os.path.join('/workspace/DGXFolder', args.path_to_h5files)
         feature_extractor_dir = os.path.join('/workspace/DGXFolder', args.path_to_feature_extractors_folder)
     elif args.where_exec == "dgx_gpu":
-        dir_results_save_graph = os.path.join('/workspace/exec/NASFolder', args.graph_savedir)
+        dir_results_save_graph = os.path.join('/workspace/exec/NASFolder/', args.graph_savedir)
         dir_h5s = os.path.join("/workspace/exec/dataDGX/", args.path_to_h5files)
-        feature_extractor_dir = os.path.join('/workspace/exec/NASFolder', args.path_to_feature_extractors_folder)
+        feature_extractor_dir = os.path.join('/workspace/exec/NASFolder/', args.path_to_feature_extractors_folder)
     elif args.where_exec == "local":
         dir_results_save_graph = os.path.join('F:', args.graph_savedir)
         dir_h5s = os.path.join('F:', args.path_to_h5files)
@@ -72,6 +72,9 @@ def main(args):
 
     os.makedirs(dir_results_save_graph, exist_ok=True) # create output directory
 
+    # Derive feature extractor_path
+    feature_extractor_path = os.path.join(feature_extractor_dir, args.feature_extractor_name)
+
     # Specify the path to your HDF5 file
     h5_files = os.listdir(dir_h5s)
 
@@ -81,7 +84,7 @@ def main(args):
         file_path = os.path.join(dir_h5s, h5file)
 
         # Directories
-        feature_extractor_path = os.path.join(feature_extractor_dir, args.feature_extractor_name)
+
 
         # Record the start time
         print(f"Extracting information from h5 file " + h5file + " ...")
