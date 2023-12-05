@@ -4,6 +4,7 @@ import os
 from tqdm import tqdm
 import argparse
 import torch
+import ast
 from graphs_utils import *
 
 
@@ -127,7 +128,7 @@ if __name__ == '__main__':
     parser.add_argument("--knn_list", default=[8, 19, 25], type=list, help='KNN values for generating graphs')
     parser.add_argument('--include_edge_features', default=True, type=lambda x: (str(x).lower() == 'true'), help="Include edge features.")
     parser.add_argument("--edges_type", default="spatial", type=str, help='Type of edge: spatial/latent')
-    parser.add_argument("--input_shape", default=(3, 256, 256), type=tuple, help='Input shape for the feature extractor.')
+    parser.add_argument("--input_shape", default="(3, 256, 256)", type=lambda x: ast.literal_eval(x), help='Input shape for the feature extractor.')
 
     args = parser.parse_args()
     main(args)
