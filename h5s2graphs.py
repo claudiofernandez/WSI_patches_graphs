@@ -122,7 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('--graph_savedir', type=str, default="output_graphs", help="path to save graphs folder")
 
     # Feature extractor params
-    parser.add_argument("--pred_mode", default="OTHERvsTNBC", type=str, help='Classification task')
+    parser.add_argument("--pred_mode", default="OTHERvsTNBC", type=str, help='Classification task') #"LUMINALAvsLAUMINALBvsHER2vsTNBC", "LUMINALSvsHER2vsTNBC", "OTHERvsTNBC"
     parser.add_argument("--feature_extractor_name", default="PM_OTHERvsTNBC_BB_vgg16_AGGR_attention_LR_0.002_OPT_sgd_T_full_dataset_D_BCNB_E_100_L_cross_entropy_OWD_0_FBB_False_PT_True_MAGN_10x_N_100_Anetwork_weights_best_f1.pth", type=str, help='Chosen feature extractor.')
 
     # Graph params
