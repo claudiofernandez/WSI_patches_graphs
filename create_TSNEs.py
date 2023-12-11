@@ -34,10 +34,78 @@ def main(args):
 
     os.makedirs(args.savedir, exist_ok=True) # create output directory
 
+    # Read ground truth
+    gt_df = pd.read_excel("./data/BCNB/ground_truth/patient-clinical-data.xlsx")
+
+    # Read patches paths class perc
+    dir_excels_class_perc = "./data/BCNB/patches_paths_class_perc"
+
+    # Read the excel including the images paths and their tissue percentage
+    train_class_perc_patches_paths_df = pd.read_csv(os.path.join(dir_excels_class_perc, "train_patches_class_perc_0_tp.csv"))
+    val_class_perc_patches_paths_df = pd.read_csv(os.path.join(dir_excels_class_perc,  "val_patches_class_perc_0_tp.csv"))
+    test_class_perc_patches_paths_df = pd.read_csv(os.path.join(dir_excels_class_perc, "test_patches_class_perc_0_tp.csv"))
+
+    # Merge 3 dataframes in 1
+    frames = [train_class_perc_patches_paths_df, val_class_perc_patches_paths_df, test_class_perc_patches_paths_df]
+
+    # Concatenate the dataframes vertically
+    merged_df = pd.concat(frames, ignore_index=True)
+
+    # Select only ppatches that contain more than 40% tissue
+    tissue_percentages_max = "O_0.4-T_1-S_1-I_1-N_1"
+
+    class_perc_0_max = float(tissue_percentages_max.split("-")[0].split("_")[-1])
+    class_perc_1_max = float(tissue_percentages_max.split("-")[1].split("_")[-1])
+    class_perc_2_max = float(tissue_percentages_max.split("-")[2].split("_")[-1])
+    class_perc_3_max = float(tissue_percentages_max.split("-")[3].split("_")[-1])
+    class_perc_4_max = float(tissue_percentages_max.split("-")[4].split("_")[-1])
+
+    # Filter and extract patches paths based on tissue percentage
+    filtered_rows = merged_df.query("class_perc_0 <= " + str(class_perc_0_max) +
+                                                "and class_perc_1 <= " + str(class_perc_1_max) +
+                                                "and class_perc_2 <= " + str(class_perc_2_max) +
+                                                "and class_perc_3 <= " + str(class_perc_3_max) +
+                                                "and class_perc_4 <= " + str(class_perc_4_max))
+
+    selected_images_paths = list(filtered_rows["patch_path"])
+
     # Graph dir
-    graphs_dir = "C:/Users\clferma1\Documents\Investigacion_GIT\Molecular_Subtype_Prediction\data\BCNB\results_graphs_november_23"
+    graphs_dir = "C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/BCNB/results_graphs_november_23"
 
     #TODO: Extract features from graphs
+
+    for root, dirs, files in os.walk(graphs_dir):
+        # Extract feature extractor name from the current directory
+        graphs_subfolder = os.path.basename(root)
+        for file_name in files:
+            if file_name.endswith(".pt"):
+                file_id = file_name.split("_")[0]
+                feature_extractor = os.path.basename(os.path.dirname(root))
+                file_path = os.path.join(root, file_name)
+
+                # Now you can use feature_extractor, subfolder, and file_path as needed
+                print("Feature Extractor:", feature_extractor)
+                print("Subfolder:", graphs_subfolder)
+                print("File:", file_name)
+                print("File Path:", file_path)
+
+                # Load graph_data
+                graph = torch.load(file_path)
+                graph_features = graph["x"]
+                graph_coords = graph["centroid"]
+
+                # Assert that the len of the patches with tissue for that ID corresponds with the number of nodes in the graphs
+                filtered_paths = [path for path in selected_images_paths if file_id in path.split("/")[-2]]
+
+                assert len(graph_features) == len(filtered_paths)
+
+                #TODO: Find matching label for graph
+
+
+
+                print("\n")
+
+
 
     # Load pretrained model
     feature_extractor_dir = os.path.join("C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/feature_extractors")
