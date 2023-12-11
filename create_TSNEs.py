@@ -8,9 +8,12 @@ import pandas
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.manifold import TSNE
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import silhouette_score
+import seaborn as sns
 from graphs_utils import *
+from tqdm import tqdm
 
 def main(args):
 
@@ -68,95 +71,142 @@ def main(args):
                                                 "and class_perc_4 <= " + str(class_perc_4_max))
 
     selected_images_paths = list(filtered_rows["patch_path"])
+    selected_images_paths = [path.replace("D:/", "F:/") for path in selected_images_paths]
+
+    # RETRIEVE PATCHES PATHS FROM NAS
+    dir_patches = "Z:/Shared_PFC-TFG-TFM/Claudio/MIL/MIL_receptors_local/data/patches_512_fullWSIs_0"
+
 
     # Graph dir
     graphs_dir = "C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/BCNB/results_graphs_november_23"
 
-    #TODO: Extract features from graphs
-
-    for root, dirs, files in os.walk(graphs_dir):
-        # Extract feature extractor name from the current directory
-        graphs_subfolder = os.path.basename(root)
-        for file_name in files:
-            if file_name.endswith(".pt"):
-                file_id = file_name.split("_")[0]
-                feature_extractor = os.path.basename(os.path.dirname(root))
-                file_path = os.path.join(root, file_name)
-
-                # Now you can use feature_extractor, subfolder, and file_path as needed
-                print("Feature Extractor:", feature_extractor)
-                print("Subfolder:", graphs_subfolder)
-                print("File:", file_name)
-                print("File Path:", file_path)
-
-                # Load graph_data
-                graph = torch.load(file_path)
-                graph_features = graph["x"]
-                graph_coords = graph["centroid"]
-
-                # Assert that the len of the patches with tissue for that ID corresponds with the number of nodes in the graphs
-                filtered_paths = [path for path in selected_images_paths if file_id in path.split("/")[-2]]
-
-                assert len(graph_features) == len(filtered_paths)
-
-                #TODO: Find matching label for graph
-
-
-
-                print("\n")
-
-
+    # Define your classification tasks
+    tasks_labels_mappings = {
+        "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "Triple negative": 3},
+        "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "Triple negative": 2},
+        "OTHERvsTNBC": {"Other": 0, "Triple negative": 1}
+    }
 
     # Load pretrained model
     feature_extractor_dir = os.path.join("C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/feature_extractors")
     feature_extractor_path = os.path.join(feature_extractor_dir , args.feature_extractor_name)
 
-    model = torch.load(feature_extractor_path)
-
-    # get all features from graphs
-
-
-    # pool them using MILAggregation
-
-    # read BCNB dataset
-
-    bb.eval()
-
-    # Assuming you have your feature vectors and corresponding labels
-    # Replace these with your actual feature vectors and labels
-    feature_vectors = your_feature_vectors
-    labels = your_labels
-
-    # Assuming you have three different classification tasks
-    tasks = ["LUMINALAvsLAUMINALBvsHER2vsTNBC", "LUMINALSvsHER2vsTNBC", "OTHERvsTNBC"]
-
-    # Create a dictionary to map labels to colors
-    label_color_map = {
-        "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"LUMINAL A": "red", "LUMINAL B": "blue", "HER2": "green", "TNBC": "purple"},
-        "LUMINALSvsHER2vsTNBC": {"LUMINAL S": "orange", "HER2": "cyan", "TNBC": "brown"},
-        "OTHERvsTNBC": {"OTHER": "pink", "TNBC": "gray"}
-    }
+    model = torch.load(feature_extractor_path).to('cuda')
 
     # Iterate through each classification task
-    for task in tasks:
-        # Extract feature vectors and labels for the current task
-        task_indices = [i for i, label in enumerate(labels) if label in label_color_map[task]]
-        task_feature_vectors = feature_vectors[task_indices]
-        task_labels = [labels[i] for i in task_indices]
+    for task, labels_mappings in tasks_labels_mappings.items():
+
+        # Initialize lists to store features, labels, and task labels
+        all_features = []
+        all_labels = []
+        all_task_labels = []
+
+        max_n_cases = 35
+        counter = 0
+
+        # Extract features from patches
+        for root, dirs, files in tqdm(os.walk(graphs_dir)):
+            # Extract feature extractor name from the current directory
+            graphs_subfolder = os.path.basename(root)
+
+            for file_name in files:
+
+                if file_name.endswith(".pt"):
+                    if counter == max_n_cases:
+                        break
+                    file_id = file_name.split("_")[0]
+                    feature_extractor = os.path.basename(os.path.dirname(root))
+                    file_path = os.path.join(root, file_name)
+
+                    # Now you can use feature_extractor, subfolder, and file_path as needed
+                    #print("Feature Extractor:", feature_extractor)
+                    #print("Subfolder:", graphs_subfolder)
+                    #print("File Path:", file_path)
+
+                    # Load graph_data
+                    graph = torch.load(file_path)
+                    graph_features = graph["x"]
+                    graph_coords = graph["centroid"]
+
+                    # Assert that the len of the patches with tissue for that ID corresponds with the number of nodes in the graphs
+                    filtered_imgs_paths = [path for path in selected_images_paths if file_id in path.split("/")[-2]]
+                    input_shape = (3, 256, 256)
+
+                    case_features = []
+                    # Read all images paths
+                    with torch.no_grad():
+                        for img_path in tqdm(filtered_imgs_paths):
+                            img = Image.open(img_path)
+                            img = torch.tensor(np.asarray(img, dtype='uint8'))
+
+                            #batch_images = images[i:i + batch_size]
+                            img = image_tensor_normalization(x=img, input_shape=input_shape,
+                                                                      channel_first=True).to('cuda')
+                            img_features = model.bb(img)
+                            img_features = torch.squeeze(img_features)
+
+                            case_features.append(img_features)
+                            torch.cuda.empty_cache()
+
+                    case_features_tensor = torch.stack(case_features)
+
+                    # Aggregate using pretrained attention
+                    case_aggr_feature_vector = model.milAggregation(case_features_tensor)
+
+                    #try:
+                    print("File:", file_name)
+                    print("Length graph features: ", len(graph_features))
+                    print("Length filtered paths: ", len(filtered_imgs_paths))
+
+                    #     assert len(graph_features) == len(filtered_paths)
+                    # except AssertionError:
+                    #     print("File:", file_name)
+                    #     print("Length graph features: ", len(graph_features))
+                    #     print("Length filtered paths: ", len(filtered_paths))
+                    #     print("Error in feature shape")
+                    #     continue
+
+
+                    #TODO: Find matching label for graph
+                    id_label = gt_df[gt_df["Patient ID"] == int(file_id)]["Molecular subtype"].values[0]
+
+                    # Encode task label to numeric value
+                    encoded_task_label = labels_mappings.get(id_label, -1)  # Use -1 as a default value if the label is not found
+
+                    # Append features, labels, and task labels
+                    all_features.append(case_aggr_feature_vector.cpu().detach().numpy())
+                    all_labels.append(encoded_task_label)
+                    all_task_labels.append(encoded_task_label)
+
+                    counter += 1
+
+        # Concatenate features for t-SNE
+        tsne_features = np.concatenate(all_features, axis=0).reshape(-1, 512)
 
         # Apply t-SNE for dimensionality reduction
-        tsne = TSNE(n_components=2, random_state=42)
-        tsne_result = tsne.fit_transform(task_feature_vectors)
+        tsne_result = TSNE(n_components=2, random_state=42).fit_transform(tsne_features) # , perplexity=5
 
         # Create a DataFrame for plotting
         df_tsne = pd.DataFrame(tsne_result, columns=['Dimension 1', 'Dimension 2'])
-        df_tsne['Labels'] = task_labels
+        # Create a DataFrame for plotting
+        df_tsne = pd.DataFrame(
+            {'Dimension 1': tsne_result[:, 0], 'Dimension 2': tsne_result[:, 1], 'Labels': all_labels})
 
         # Plot t-SNE with seaborn
         plt.figure(figsize=(10, 8))
-        sns.scatterplot(x='Dimension 1', y='Dimension 2', hue='Labels', palette=label_color_map[task], data=df_tsne)
+        sns.scatterplot(x='Dimension 1', y='Dimension 2',
+                        data=df_tsne)
         plt.title(f't-SNE Plot for {task}')
         plt.show()
+
+        # Plot t-SNE with seaborn
+        plt.figure(figsize=(10, 8))
+        sns.scatterplot(x='Dimension 1', y='Dimension 2', hue='Labels', palette='viridis',
+                        data=df_tsne)
+        plt.title(f't-SNE Plot for {task}')
+        plt.show()
+
+        print("\n")
 
 
 if __name__ == '__main__':
