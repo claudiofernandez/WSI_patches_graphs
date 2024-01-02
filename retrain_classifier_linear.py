@@ -132,7 +132,8 @@ def load_and_preprocess_clarify_data(seed, data, target):
 # Main function
 def main(args):
 
-    # Load CLARIFY Data
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
 
     # Read ground truth
     #gt_df = pd.read_excel("../data/BCNB/ground_truth/patient-clinical-data.xlsx")
@@ -327,6 +328,11 @@ def main(args):
             # Training loop
             for epoch in range(num_epochs):
                 classifier.train()
+                accumulated_loss = 0.0
+                refs_train = []
+                preds_train = []
+                preds_prob_train = []
+
 
                 for i in range(0, len(X_train), batch_size):
                     X_batch = X_train[i:i + batch_size]
@@ -336,35 +342,50 @@ def main(args):
                     train_Y_hat = torch.argmax(train_logits, dim=1)
                     train_Y_prob = F.softmax(train_logits, dim=1)
 
-                    train_accuracy = accuracy_score(Y_batch.cpu().numpy(), train_Y_hat.cpu().numpy())
-                    if nClasses > 2:
-                        train_auc = roc_auc_score(Y_batch.cpu().numpy(), train_Y_prob.cpu().detach().numpy(), multi_class='ovr')
-                    else:
-                        train_y_score_positive_class = val_prob.cpu().detach().numpy()[:, 1]
-                        train_auc = roc_auc_score(Y_batch.cpu().numpy(), train_y_score_positive_class)
-
-                    train_weighted_f1_score = f1_score(Y_batch.cpu().numpy(), train_Y_hat.cpu().numpy(),
-                                                     average='weighted')
-                    train_precision = precision_score(Y_batch.cpu().numpy(), train_Y_hat.cpu().numpy(),
-                                                    average='weighted')
-                    train_recall = recall_score(Y_batch.cpu().numpy(), train_Y_hat.cpu().numpy(), average='weighted')
-
+                    preds_train.append(train_Y_hat.detach().cpu().numpy())
+                    preds_prob_train.append(train_Y_prob.detach().cpu().numpy())
+                    refs_train.append(Y_batch.detach().cpu().numpy())
 
                     L_train = custom_categorical_cross_entropy(y_pred=train_logits.squeeze(),
                                                          y_true=Y_batch,
                                                          class_weights=class_weights,
                                                          loss_function="cross_entropy")
+                    accumulated_loss += L_train.item()
 
                     optimizer.zero_grad()
                     L_train.backward()
                     optimizer.step()
 
-                    # Log to MLFlow
-                    mlflow.log_metric("train_auc", train_auc, step=epoch)
-                    mlflow.log_metric("train_weighted_f1_score", train_weighted_f1_score, step=epoch)
-                    mlflow.log_metric("train_precision", train_precision, step=epoch)
-                    mlflow.log_metric("train_recall", train_recall, step=epoch)
-                    mlflow.log_metric("L_train", L_train, step=epoch)
+
+                # Epoch end
+                refs_train = np.concatenate(np.array(refs_train))
+                preds_train = np.concatenate(np.array(preds_train))
+                preds_prob_train = np.concatenate(np.array(preds_prob_train))
+
+
+                train_accuracy = accuracy_score(refs_train, preds_train)
+                if nClasses > 2:
+                    train_auc = roc_auc_score(refs_train, preds_prob_train,
+                                              multi_class='ovr')
+                else:
+                    train_y_score_positive_class = preds_prob_train[:, 1]
+                    train_auc = roc_auc_score(refs_train, train_y_score_positive_class)
+
+                train_weighted_f1_score = f1_score(refs_train, preds_train,
+                                                   average='weighted')
+                train_precision = precision_score(refs_train, preds_train,
+                                                  average='weighted')
+                train_recall = recall_score(refs_train, preds_train, average='weighted')
+
+                # Calculate average loss per epoch
+                L_epoch = accumulated_loss / (len(X_train) / batch_size)
+
+                # Log to MLFlow
+                mlflow.log_metric("train_auc", train_auc, step=epoch)
+                mlflow.log_metric("train_weighted_f1_score", train_weighted_f1_score, step=epoch)
+                mlflow.log_metric("train_precision", train_precision, step=epoch)
+                mlflow.log_metric("train_recall", train_recall, step=epoch)
+                mlflow.log_metric("L_train_epoch", L_epoch, step=epoch)
 
 
                 with torch.no_grad():
@@ -463,7 +484,10 @@ def main(args):
                 print(f"Confusion Matrix - Fold {fold + 1} (Test):")
                 print(cm_test)
 
+                # Create output directory
+                os.makedirs(os.path.join(args.output_dir, mlflow_experiment_name, mlflow_run_name), exist_ok=True)
 
+                cf_savepath = os.path.join(args.output_dir, mlflow_experiment_name, mlflow_run_name, f"Confusion_Matrix-Fold:{fold + 1}_Test.png")
                 # Display the confusion matrix using seaborn heatmap
                 plt.figure(figsize=(8, 6))
                 sns.heatmap(cm_test, annot=True, fmt="d", cmap="Blues", xticklabels=task_labels_mapping,
@@ -471,8 +495,9 @@ def main(args):
                 # plt.xlabel("Predicted Label")
                 # plt.ylabel("True Label")
                 plt.title(f"Confusion Matrix - Fold {fold + 1} (Test)")
-                mlflow.log_image(plt, f"CM_Fold_{fold + 1}_(Test).png")
-                plt.show()
+                plt.savefig(cf_savepath, bbox_inches='tight')
+                mlflow.log_artifact(cf_savepath, f"test_cf_:{fold + 1}")
+                #plt.show()
 
             mlflow.end_run()
 
@@ -491,40 +516,56 @@ def main(args):
 # Run the main function
 if __name__ == "__main__":
 
-    ##########################
-    # CREATE ARGUMENT PARSER #
-    ##########################
-    parser = argparse.ArgumentParser()
+    optimizers = ["adam", "sgd"]
+    lrs = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+    owds = [0, 0.1, 0.01, 0.001, 0.0001, 0.00001]
+    batch_sizes = [16, 32, 64, 128]
+    hidden_sizes = [[256], [128], [64]]
+    activations = [[nn.ReLU()], [nn.Tanh()]]
+    cas = ["CA", "NCA"]
 
-    # MLFlow configuration
-    parser.add_argument("--mlflow_experiment_name", default="[Dev] CV Classifier on CBDC ", type=str,
-                        help='Name for experiment in MLFlow')
-    parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
+    for optimizer in optimizers:
+        for lr in lrs:
+            for owd in owds:
+                for batch_size in batch_sizes:
+                    for hidden_size in hidden_sizes:
+                        for activation in activations:
+                            for ca in cas:
+                                ##########################
+                                # CREATE ARGUMENT PARSER #
+                                ##########################
+                                parser = argparse.ArgumentParser()
 
-    # General params
-    parser.add_argument('--where_exec', type=str, default="local", help="slurm_dgx, slurm_nas, dgx_gpu or local")
-    parser.add_argument('--path_to_bcnb_dataset', type=str, default="C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/BCNB", help="path where h5 files are located")
-    parser.add_argument('--path_to_feature_extractors_folder', type=str, default="/Molecular_Subtype_Prediction/data/feature_extractors", help="path where feature extractors are located")
-    parser.add_argument('--seed', type=int, default=47, help="seed for reproducibility")
-    parser.add_argument('--feats_savedir', type=str, default="../data/extracted_features/NCA_WSI_feats", help="path to save features folder")
+                                # MLFlow configuration
+                                parser.add_argument("--mlflow_experiment_name", default="[Dev] CV Classifier on CBDC ", type=str,
+                                                    help='Name for experiment in MLFlow')
+                                parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
-    # Feature extractor params
-    #parser.add_argument("--pred_mode", default="OTHERvsTNBC", type=str, help='Classification task') #
-    parser.add_argument("--context_aware", default="NCA", type=str, help='Context-aware (CA) or Non-Context-Aware (NCA)')
-    parser.add_argument("--graphs_dir", default="../data/CLARIFY/results_graphs_november_23", type=str, help='Directory where graphs are stored.') # "C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/BCNB/results_graphs_november_23"
-    #parser.add_argument("--knn", default=25, type=int, help='KNN used to store graphs.')
-    parser.add_argument("--epochs", default=500, type=int, help='KNN used to store graphs.')
-    parser.add_argument("--batch_size", default=64, type=int, help='KNN used to store graphs.')
+                                # General params
+                                parser.add_argument('--where_exec', type=str, default="local", help="slurm_dgx, slurm_nas, dgx_gpu or local")
+                                parser.add_argument('--path_to_bcnb_dataset', type=str, default="C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/BCNB", help="path where h5 files are located")
+                                parser.add_argument('--path_to_feature_extractors_folder', type=str, default="/Molecular_Subtype_Prediction/data/feature_extractors", help="path where feature extractors are located")
+                                parser.add_argument('--seed', type=int, default=47, help="seed for reproducibility")
+                                parser.add_argument('--feats_savedir', type=str, default="../data/extracted_features/NCA_WSI_feats", help="path to save features folder")
+                                parser.add_argument('--output_dir', type=str, default="../data/outputs", help="path to savefigs")
 
-    parser.add_argument("--n_kfolds", default=5, type=float, help='number of K folds for the Cross Validatio')
-    parser.add_argument("--test_size", default=0.3, type=float, help='Percentage of the full test_size')
-    parser.add_argument("--lr", default=0.001, type=float, help='KNN used to store graphs.')
-    parser.add_argument("--owd", default=0.00001, type=float, help='KNN used to store graphs.')
-    parser.add_argument("--knn", default=19, type=int, help='KNN used to store graphs.')
-    parser.add_argument("--optimizer_type", default="adam", type=str, help='adam or sgd')
+                                # Feature extractor params
+                                #parser.add_argument("--pred_mode", default="OTHERvsTNBC", type=str, help='Classification task') #
+                                parser.add_argument("--context_aware", default=ca, type=str, help='Context-aware (CA) or Non-Context-Aware (NCA)')
+                                parser.add_argument("--graphs_dir", default="../data/CLARIFY/results_graphs_november_23", type=str, help='Directory where graphs are stored.') # "C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/BCNB/results_graphs_november_23"
+                                #parser.add_argument("--knn", default=25, type=int, help='KNN used to store graphs.')
+                                parser.add_argument("--epochs", default=100, type=int, help='KNN used to store graphs.')
+                                parser.add_argument("--batch_size", default=batch_size, type=int, help='KNN used to store graphs.')
 
-    parser.add_argument("--hidden_size", default=[256, 125], type=list, help='hidden dimension of classifier')
-    parser.add_argument("--activations", default=[nn.ReLU(), nn.Tanh()], type=list, help='activation introduces non-linearity')
+                                parser.add_argument("--n_kfolds", default=5, type=float, help='number of K folds for the Cross Validatio')
+                                parser.add_argument("--test_size", default=0.3, type=float, help='Percentage of the full test_size')
+                                parser.add_argument("--lr", default=lr, type=float, help='KNN used to store graphs.')
+                                parser.add_argument("--owd", default=owd, type=float, help='KNN used to store graphs.')
+                                parser.add_argument("--knn", default=19, type=int, help='KNN used to store graphs.')
+                                parser.add_argument("--optimizer_type", default=optimizer, type=str, help='adam or sgd')
 
-    args = parser.parse_args()
-    main(args)
+                                parser.add_argument("--hidden_size", default=hidden_size, type=list, help='hidden dimension of classifier')
+                                parser.add_argument("--activations", default=activation, type=list, help='activation introduces non-linearity')
+
+                                args = parser.parse_args()
+                                main(args)
