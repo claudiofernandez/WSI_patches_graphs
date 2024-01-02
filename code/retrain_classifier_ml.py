@@ -10,9 +10,15 @@ import sklearn.ensemble
 import sklearn.neural_network
 import sklearn.model_selection
 from sklearn.metrics import make_scorer, f1_score
-
+from collections import Counter
+#from sklearn.metrics import roc_auc_score
 import seaborn as sns
-from sklearn.metrics import ConfusionMatrixDisplay
+#from sklearn.metrics import ConfusionMatrixDisplay
+from sklearn.utils._testing import ignore_warnings
+#from sklearn.exceptions import ConvergenceWarning
+#@ignore_warnings(category=ConvergenceWarning)
+
+
 
 def plot_confusion_matrices(confusion_matrices, label_mappings=None):
     """
@@ -85,7 +91,7 @@ class supervised_models:
                           'p': [1, 2, 3]}
 
         elif model == 'svm':
-            clf = sklearn.svm.SVC()
+            clf = sklearn.svm.SVC(probability=True)
             param_grid = {'C': [0.1, 1, 10, 100, 1000],
                           'gamma': [1, 0.1, 0.01, 0.0001],
                           'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
@@ -101,7 +107,7 @@ class supervised_models:
 
         elif model == 'xgb':
             clf = sklearn.ensemble.GradientBoostingClassifier()
-            param_grid = {'learning_rate': [0.001, 0.01, 0.1, 1, 10],
+            param_grid = {'learning_rate': [0.001, 0.01, 0.1],
                           'n_estimators': [50, 100, 200, 500],
                           'min_samples_split': [2, 4],
                           'max_depth': [2, 3, 4],
@@ -145,7 +151,7 @@ def load_and_preprocess_data(seed):
     return X_train, X_test, y_train, y_test
 
 def load_and_preprocess_clarify_data(seed, data, target):
-    X_train, X_test, y_train, y_test = train_test_split(data, target, test_size=0.2, random_state=seed)
+    X_train, X_test, y_train, y_test = train_test_split(data, target, test_size=0.3, random_state=seed, stratify=target)
     return X_train, X_test, y_train, y_test
 
 def train_ml_classifiers(X_train, X_test, y_train, y_test):
@@ -276,11 +282,14 @@ def train_ml_classifiers(X_train, X_test, y_train, y_test):
     print("hola")
 
 def train_ml_classifiers_df(X_train, X_test, y_train, y_test):
+
+
     results = []
     full_classification_reports = {}
     confusion_matrices = {}
 
     def train_and_evaluate(model_name, model, X_train, y_train, X_test, y_test):
+        from sklearn.metrics import roc_auc_score
         print("Training with: ", model_name)
         model.fit(X_train, y_train)
         predictions = model.predict(X_test)
@@ -291,21 +300,34 @@ def train_ml_classifiers_df(X_train, X_test, y_train, y_test):
         cm = confusion_matrix(y_test, predictions)
         confusion_matrices[model_name] = cm
 
+        if len(np.unique(y_test))>2:
+            predictions_prob = model.predict_proba(X_test)
+
+            roc_auc_score = roc_auc_score(y_test, predictions_prob, multi_class='ovr')
+        else:
+            roc_auc_score = roc_auc_score(y_test, predictions)
+
         return {
             'Model': model_name,
             'Precision': report['weighted avg']['precision'],
             'Recall': report['weighted avg']['recall'],
             'F1-Score': report['weighted avg']['f1-score'],
-            'Support': report['weighted avg']['support']
+            'Support': report['weighted avg']['support'],
+            'AUC': roc_auc_score
         }
 
     # Initialize the supervised_models class
     model_handler = supervised_models(n_seed=47)
 
-    # # Logistic Regression
-    # lr_model = model_handler.models(cv=5, model='lr')
-    # lr_results = train_and_evaluate('Logistic Regression', lr_model, X_train, y_train, X_test, y_test)
-    # results.append(lr_results)
+    # Support Vector Machine (SVM)
+    svm_model = model_handler.models(cv=5, model='svm')
+    svm_results = train_and_evaluate('Support Vector Machine', svm_model, X_train, y_train, X_test, y_test)
+    results.append(svm_results)
+
+    # Logistic Regression
+    lr_model = model_handler.models(cv=5, model='lr')
+    lr_results = train_and_evaluate('Logistic Regression', lr_model, X_train, y_train, X_test, y_test)
+    results.append(lr_results)
 
     # Naive Bayes
     nb_model = model_handler.models(cv=5, model='nb')
@@ -317,30 +339,25 @@ def train_ml_classifiers_df(X_train, X_test, y_train, y_test):
     knn_results = train_and_evaluate('KNN', knn_model, X_train, y_train, X_test, y_test)
     results.append(knn_results)
 
-    # # Random Forest
-    # rf_model = model_handler.models(cv=5, model='rf')
-    # rf_results = train_and_evaluate('Random Forest', rf_model, X_train, y_train, X_test, y_test)
-    # results.append(rf_results)
+    # Random Forest
+    rf_model = model_handler.models(cv=5, model='rf')
+    rf_results = train_and_evaluate('Random Forest', rf_model, X_train, y_train, X_test, y_test)
+    results.append(rf_results)
 
-    # # XGBoost
-    # xgb_model = model_handler.models(cv=5, model='xgb')
-    # xgb_results = train_and_evaluate('XGBoost', xgb_model, X_train, y_train, X_test, y_test)
-    # results.append(xgb_results)
+    # XGBoost
+    xgb_model = model_handler.models(cv=5, model='xgb')
+    xgb_results = train_and_evaluate('XGBoost', xgb_model, X_train, y_train, X_test, y_test)
+    results.append(xgb_results)
 
     # # Stochastic Gradient Descent (SGD)
     # sgd_model = model_handler.models(cv=5, model='sgd')
     # sgd_results = train_and_evaluate('SGD', sgd_model, X_train, y_train, X_test, y_test)
     # results.append(sgd_results)
 
-    # # Multi-layer Perceptron (MLP)
-    # mlp_model = model_handler.models(cv=5, model='mlp')
-    # mlp_results = train_and_evaluate('Multi-layer Perceptron', mlp_model, X_train, y_train, X_test, y_test)
-    # results.append(mlp_results)
-    #
-    # # Support Vector Machine (SVM)
-    # svm_model = model_handler.models(cv=5, model='svm')
-    # svm_results = train_and_evaluate('Support Vector Machine', svm_model, X_train, y_train, X_test, y_test)
-    # results.append(svm_results)
+    # Multi-layer Perceptron (MLP)
+    mlp_model = model_handler.models(cv=5, model='mlp')
+    mlp_results = train_and_evaluate('Multi-layer Perceptron', mlp_model, X_train, y_train, X_test, y_test)
+    results.append(mlp_results)
 
     # Create DataFrame
     results_df = pd.DataFrame(results)
@@ -374,6 +391,7 @@ def main(args):
         print("hola")
 
     graphs_dirs = os.listdir(args.graphs_dir)
+    #graphs_dirs.reverse()
 
     for graph_dirname in graphs_dirs:
 
@@ -465,7 +483,7 @@ def main(args):
         all_labels = np.array(all_labels)
 
         # Load and preprocess data
-        X_train, X_test, y_train, y_test = load_and_preprocess_clarify_data(seed=47, data=tsne_features, target=all_labels)
+        X_train, X_test, y_train, y_test = load_and_preprocess_clarify_data(seed=args.seed, data=tsne_features, target=all_labels)
 
         # Example usage:
         df_results, classification_reports, confusion_matrices = train_ml_classifiers_df(X_train, X_test, y_train, y_test)
@@ -473,6 +491,8 @@ def main(args):
         print(classification_reports)
         print(confusion_matrices)
         plot_confusion_matrices(confusion_matrices, label_mappings=tasks_labels_mappings[fe_taskname])
+
+    print("hola")
 
 # Run the main function
 if __name__ == "__main__":
@@ -486,7 +506,7 @@ if __name__ == "__main__":
     parser.add_argument('--where_exec', type=str, default="local", help="slurm_dgx, slurm_nas, dgx_gpu or local")
     parser.add_argument('--path_to_bcnb_dataset', type=str, default="C:/Users/clferma1/Documents/Investigacion_GIT/Molecular_Subtype_Prediction/data/BCNB", help="path where h5 files are located")
     parser.add_argument('--path_to_feature_extractors_folder', type=str, default="/Molecular_Subtype_Prediction/data/feature_extractors", help="path where feature extractors are located")
-    #parser.add_argument('--tsne_savedir', type=str, default="/output_tsnes", help="path to save graphs folder")
+    parser.add_argument('--seed', type=int, default=10, help="seed for reproducibility")
     parser.add_argument('--feats_savedir', type=str, default="../data/extracted_features/NCA_WSI_feats", help="path to save features folder")
 
     # Feature extractor params
