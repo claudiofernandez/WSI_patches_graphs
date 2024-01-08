@@ -83,13 +83,16 @@ def custom_categorical_cross_entropy(y_pred, y_true, class_weights=None, loss_fu
         loss_not_balanced = torch.nn.MSELoss()
 
     # Compute the unweighted loss using the chosen loss function.
-    loss = loss_not_balanced(y_pred, y_true)
-    y_pred_hat = torch.argmax(y_pred, dim=1)
+    try:
+        loss = loss_not_balanced(y_pred, y_true)
+        y_pred_hat = torch.argmax(y_pred, dim=1)
 
-    # If class weights are specified, compute the weight for the actual class and apply it to the loss.
-    if class_weights is not None:
-        weight_actual_class = class_weights[y_true]
-        loss = loss * weight_actual_class
+        # If class weights are specified, compute the weight for the actual class and apply it to the loss.
+        if class_weights is not None:
+            weight_actual_class = class_weights[y_true]
+            loss = loss * weight_actual_class
+    except RuntimeError:
+        print("hola")
 
     # Return the computed loss.
     return loss.mean()
@@ -517,9 +520,9 @@ def main(args):
 if __name__ == "__main__":
 
     optimizers = ["adam", "sgd"]
-    lrs = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+    lrs = [0.01, 0.001, 0.0001, 0.00001]
     owds = [0, 0.1, 0.01, 0.001, 0.0001, 0.00001]
-    batch_sizes = [16, 32, 64, 128]
+    batch_sizes = [64, 128]
     hidden_sizes = [[256], [128], [64]]
     activations = [[nn.ReLU()], [nn.Tanh()]]
     cas = ["CA", "NCA"]
