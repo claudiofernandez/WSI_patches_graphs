@@ -20,8 +20,10 @@ def main(args):
     # os.makedirs(args.feats_savedir, exist_ok=True) # create output directory
 
     # Read ground truth
-    #gt_df = pd.read_excel("../data/BCNB/ground_truth/patient-clinical-data.xlsx")
-    gt_df = pd.read_excel("../data/CLARIFY/ground_truth/final_clinical_info_CLARIFY_DB.xlsx")
+    gt_df = pd.read_excel("../data/BCNB/ground_truth/patient-clinical-data.xlsx")
+    #gt_df = pd.read_excel("../data/CLARIFY/ground_truth/final_clinical_info_CLARIFY_DB.xlsx")
+    #gt_df = pd.read_excel("../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx")
+
 
     # Read patches paths class perc
     dir_excels_class_perc = "../data/BCNB/patches_paths_class_perc"
@@ -64,11 +66,17 @@ def main(args):
 
 
     # Define your classification tasks
+    # tasks_labels_mappings = {
+    #     "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "Triple negative": 3},
+    #     "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "Triple negative": 2},
+    #     "OTHERvsTNBC": {"Other": 0, "Triple negative": 1}
+    # }
     tasks_labels_mappings = {
-        "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "Triple negative": 3},
-        "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "Triple negative": 2},
-        "OTHERvsTNBC": {"Other": 0, "Triple negative": 1}
+        "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "TNBC": 3},
+        "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "TNBC": 2},
+        "OTHERvsTNBC": {"Other": 0, "TNBC": 1}
     }
+
 
     #Iterate over the graphs
 
@@ -188,7 +196,9 @@ def main(args):
 
 
             # Find matching label for graph
-            id_label = gt_df[gt_df["SUS_number"] == file_id]["MolSubtype_surr"].values[0]
+            #  id_label = gt_df[gt_df["SUS_number"] == file_id]["MolSubtype_surr"].values[0]
+            id_label = gt_df[gt_df["SUS_number"] == file_id]["Molsub_surr_4clf"].values[0]
+
 
             # Encode task label to numeric value
             encoded_task_label = task_labels_mapping.get(id_label, 0)  # Use 0 as a default value if the label is not found
