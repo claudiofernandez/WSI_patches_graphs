@@ -67,138 +67,136 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
     with open(indices_save_path, 'w') as index_file:
 
         for repeat in range(n_repeats):
+            # Start a nested MLFlow run for each repeat
+            with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{fe_taskname}", nested=True):
+                mlflow.log_param("Folds", n_folds)
+                mlflow.log_param("Repeats", n_repeats)
+                mlflow.log_param("Task", fe_taskname)
 
-            for repeat in range(n_repeats):
-                # Start a nested MLFlow run for each repeat
-                with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{fe_taskname}", nested=True):
-                    mlflow.log_param("Folds", n_folds)
-                    mlflow.log_param("Repeats", n_repeats)
-                    mlflow.log_param("Task", fe_taskname)
+                fold_metrics = []  # Store metrics for each fold in the current repeat
+                cumulative_cm = None  # To store the accumulated confusion matrix
 
-                    fold_metrics = []  # Store metrics for each fold in the current repeat
-                    cumulative_cm = None  # To store the accumulated confusion matrix
+                for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
+                    print(f"Fold {fold + 1}/{n_folds}")
 
-                    for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
-                        print(f"Fold {fold + 1}/{n_folds}")
+                    # Log the indices of the training and test set for reproducibility
+                    index_file.write(f"Repeat {repeat + 1}, Fold {fold + 1}\n")
+                    index_file.write(f"Train indices: {train_index.tolist()}\n")
+                    index_file.write(f"Test indices: {test_index.tolist()}\n\n")
 
-                        # Log the indices of the training and test set for reproducibility
-                        index_file.write(f"Repeat {repeat + 1}, Fold {fold + 1}\n")
-                        index_file.write(f"Train indices: {train_index.tolist()}\n")
-                        index_file.write(f"Test indices: {test_index.tolist()}\n\n")
+                    # Log the train/test indices in MLFlow as well
+                    mlflow.log_text(str(train_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_train_indices.txt")
+                    mlflow.log_text(str(test_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_test_indices.txt")
 
-                        # Log the train/test indices in MLFlow as well
-                        mlflow.log_text(str(train_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_train_indices.txt")
-                        mlflow.log_text(str(test_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_test_indices.txt")
+                    # Split the dataset into training and testing for this fold
+                    X_train, X_test = X[train_index], X[test_index]
+                    y_train, y_test = y[train_index], y[test_index]
 
-                        # Split the dataset into training and testing for this fold
-                        X_train, X_test = X[train_index], X[test_index]
-                        y_train, y_test = y[train_index], y[test_index]
+                    # Convert to PyTorch tensors
+                    X_train, y_train = torch.tensor(X_train, dtype=torch.float32).to('cuda'), torch.tensor(y_train).to('cuda')
+                    X_test, y_test = torch.tensor(X_test, dtype=torch.float32).to('cuda'), torch.tensor(y_test).to('cuda')
 
-                        # Convert to PyTorch tensors
-                        X_train, y_train = torch.tensor(X_train, dtype=torch.float32).to('cuda'), torch.tensor(y_train).to('cuda')
-                        X_test, y_test = torch.tensor(X_test, dtype=torch.float32).to('cuda'), torch.tensor(y_test).to('cuda')
+                    classifier = classifier.to('cuda')
+                    optimizer = torch.optim.Adam(classifier.parameters(), lr=0.0001)
+                    #optimizer = torch.optim.SGD(classifier.parameters, lr=0.0000001)
 
-                        classifier = classifier.to('cuda')
-                        optimizer = torch.optim.Adam(classifier.parameters(), lr=0.00001)
-                        #optimizer = torch.optim.SGD(classifier.parameters, lr=0.0000001)
+                    # Re-train the classifier for each fold
+                    for epoch in range(epochs):
+                        classifier.train()
+                        epoch_loss = 0
+                        for i in range(0, len(X_train), batch_size):
+                            X_batch = X_train[i:i + batch_size]
+                            y_batch = y_train[i:i + batch_size]
 
-                        # Re-train the classifier for each fold
-                        for epoch in range(epochs):
-                            classifier.train()
-                            epoch_loss = 0
-                            for i in range(0, len(X_train), batch_size):
-                                X_batch = X_train[i:i + batch_size]
-                                y_batch = y_train[i:i + batch_size]
+                            optimizer.zero_grad()
+                            logits = classifier(X_batch)
+                            loss = custom_categorical_cross_entropy(logits, y_batch, class_weights=class_weights)
+                            loss.backward()
+                            optimizer.step()
 
-                                optimizer.zero_grad()
-                                logits = classifier(X_batch)
-                                loss = custom_categorical_cross_entropy(logits, y_batch, class_weights=class_weights)
-                                loss.backward()
-                                optimizer.step()
+                            epoch_loss += loss.item()
 
-                                epoch_loss += loss.item()
+                        # Log training metrics after each epoch
+                        avg_epoch_loss = epoch_loss / len(X_train)
+                        mlflow.log_metric("Train_Loss_"+str(fold), float(np.round(avg_epoch_loss, 4)), step=epoch)
 
-                            # Log training metrics after each epoch
-                            avg_epoch_loss = epoch_loss / len(X_train)
-                            mlflow.log_metric("Train_Loss_"+str(fold), float(np.round(avg_epoch_loss, 4)), step=epoch)
+                    # Evaluate on the test set
+                    classifier.eval()
+                    with torch.no_grad():
+                        test_logits = classifier(X_test)
+                        y_pred = torch.argmax(test_logits, dim=1).cpu().numpy()
+                        y_true = y_test.cpu().numpy()
 
-                        # Evaluate on the test set
-                        classifier.eval()
-                        with torch.no_grad():
-                            test_logits = classifier(X_test)
-                            y_pred = torch.argmax(test_logits, dim=1).cpu().numpy()
-                            y_true = y_test.cpu().numpy()
+                        # Calculate metrics and confusion matrix
+                        cm = confusion_matrix(y_true, y_pred, labels=np.unique(y))
+                        acc = accuracy_score(y_true, y_pred)
+                        f1 = f1_score(y_true, y_pred, average='weighted')
+                        precision = precision_score(y_true, y_pred, average='weighted')
+                        recall = recall_score(y_true, y_pred, average='weighted')
+                        # For binary classification, use the probability of the positive class (second column)
+                        if len(np.unique(y_true)) == 2:
+                            auc = roc_auc_score(y_true, F.softmax(test_logits, dim=1).cpu().numpy()[:, 1])
+                        else:
+                            # For multi-class, calculate AUC with `multi_class='ovr'`
+                            auc = roc_auc_score(y_true, F.softmax(test_logits, dim=1).cpu().numpy(), multi_class='ovr')
 
-                            # Calculate metrics and confusion matrix
-                            cm = confusion_matrix(y_true, y_pred, labels=np.unique(y))
-                            acc = accuracy_score(y_true, y_pred)
-                            f1 = f1_score(y_true, y_pred, average='weighted')
-                            precision = precision_score(y_true, y_pred, average='weighted')
-                            recall = recall_score(y_true, y_pred, average='weighted')
-                            # For binary classification, use the probability of the positive class (second column)
-                            if len(np.unique(y_true)) == 2:
-                                auc = roc_auc_score(y_true, F.softmax(test_logits, dim=1).cpu().numpy()[:, 1])
-                            else:
-                                # For multi-class, calculate AUC with `multi_class='ovr'`
-                                auc = roc_auc_score(y_true, F.softmax(test_logits, dim=1).cpu().numpy(), multi_class='ovr')
+                        # Accumulate confusion matrix
+                        if cumulative_cm is None:
+                            cumulative_cm = cm
+                        else:
+                            cumulative_cm += cm
 
-                            # Accumulate confusion matrix
-                            if cumulative_cm is None:
-                                cumulative_cm = cm
-                            else:
-                                cumulative_cm += cm
+                        # Log test metrics
+                        mlflow.log_metric(f"Test_Accuracy_Repeat_{repeat+1}_Fold_{fold+1}", acc)
+                        mlflow.log_metric(f"Test_F1_Repeat_{repeat+1}_Fold_{fold+1}", f1)
+                        mlflow.log_metric(f"Test_Precision_Repeat_{repeat+1}_Fold_{fold+1}", precision)
+                        mlflow.log_metric(f"Test_Recall_Repeat_{repeat+1}_Fold_{fold+1}", recall)
+                        mlflow.log_metric(f"Test_AUC_Repeat_{repeat+1}_Fold_{fold+1}", auc)
 
-                            # Log test metrics
-                            mlflow.log_metric(f"Test_Accuracy_Repeat_{repeat+1}_Fold_{fold+1}", acc)
-                            mlflow.log_metric(f"Test_F1_Repeat_{repeat+1}_Fold_{fold+1}", f1)
-                            mlflow.log_metric(f"Test_Precision_Repeat_{repeat+1}_Fold_{fold+1}", precision)
-                            mlflow.log_metric(f"Test_Recall_Repeat_{repeat+1}_Fold_{fold+1}", recall)
-                            mlflow.log_metric(f"Test_AUC_Repeat_{repeat+1}_Fold_{fold+1}", auc)
+                        fold_metrics.append({
+                            'Repeat': repeat,
+                            'Fold': fold,
+                            'Accuracy': acc,
+                            'F1': f1,
+                            'Precision': precision,
+                            'Recall': recall,
+                            'AUC': auc
+                        })
 
-                            fold_metrics.append({
-                                'Repeat': repeat,
-                                'Fold': fold,
-                                'Accuracy': acc,
-                                'F1': f1,
-                                'Precision': precision,
-                                'Recall': recall,
-                                'AUC': auc
-                            })
+                # Log the average metrics for this repeat
+                fold_metrics_df = pd.DataFrame(fold_metrics)
+                avg_fold_metrics = fold_metrics_df.mean()
+                mlflow.log_metric(f"Avg_Accuracy_Repeat_{repeat+1}", avg_fold_metrics['Accuracy'])
+                mlflow.log_metric(f"Avg_F1_Repeat_{repeat+1}", avg_fold_metrics['F1'])
+                mlflow.log_metric(f"Avg_Precision_Repeat_{repeat+1}", avg_fold_metrics['Precision'])
+                mlflow.log_metric(f"Avg_Recall_Repeat_{repeat+1}", avg_fold_metrics['Recall'])
+                mlflow.log_metric(f"Avg_AUC_Repeat_{repeat+1}", avg_fold_metrics['AUC'])
 
-                    # Log the average metrics for this repeat
-                    fold_metrics_df = pd.DataFrame(fold_metrics)
-                    avg_fold_metrics = fold_metrics_df.mean()
-                    mlflow.log_metric(f"Avg_Accuracy_Repeat_{repeat+1}", avg_fold_metrics['Accuracy'])
-                    mlflow.log_metric(f"Avg_F1_Repeat_{repeat+1}", avg_fold_metrics['F1'])
-                    mlflow.log_metric(f"Avg_Precision_Repeat_{repeat+1}", avg_fold_metrics['Precision'])
-                    mlflow.log_metric(f"Avg_Recall_Repeat_{repeat+1}", avg_fold_metrics['Recall'])
-                    mlflow.log_metric(f"Avg_AUC_Repeat_{repeat+1}", avg_fold_metrics['AUC'])
+                # Accumulate metrics across repeats
+                all_metrics.extend(fold_metrics)
 
-                    # Accumulate metrics across repeats
-                    all_metrics.extend(fold_metrics)
+                # Save cumulative confusion matrix after each repeat
+                cm_image_path = os.path.join(output_dir, f"cumulative_confusion_matrix_repeat_{repeat+1}.png")
+                plot_confusion_matrix(cumulative_cm, labels=np.unique(y), fe_taskname=fe_taskname, cm_image_path=cm_image_path)
+                mlflow.log_artifact(cm_image_path, f"confusion_matrices/repeat_{repeat+1}")
 
-                    # Save cumulative confusion matrix after each repeat
-                    cm_image_path = os.path.join(output_dir, f"cumulative_confusion_matrix_repeat_{repeat+1}.png")
-                    plot_confusion_matrix(cumulative_cm, labels=np.unique(y), fe_taskname=fe_taskname, cm_image_path=cm_image_path)
-                    mlflow.log_artifact(cm_image_path, f"confusion_matrices/repeat_{repeat+1}")
-
-                    # End MLFlow run after each repeat
-                    mlflow.end_run()
-
-                # Calculate overall average metrics across all repeats
-                all_metrics_df = pd.DataFrame(all_metrics)
-                overall_avg_metrics = all_metrics_df.mean()
-
-                # Log overall average metrics to MLFlow
-                mlflow.start_run(run_name=f"Overall_Avg_{fe_taskname}")
-                mlflow.log_metric("Overall_Avg_Accuracy", overall_avg_metrics['Accuracy'])
-                mlflow.log_metric("Overall_Avg_F1", overall_avg_metrics['F1'])
-                mlflow.log_metric("Overall_Avg_Precision", overall_avg_metrics['Precision'])
-                mlflow.log_metric("Overall_Avg_Recall", overall_avg_metrics['Recall'])
-                mlflow.log_metric("Overall_Avg_AUC", overall_avg_metrics['AUC'])
+                # End MLFlow run after each repeat
                 mlflow.end_run()
 
-        return all_metrics_df, cumulative_cm
+            # Calculate overall average metrics across all repeats
+            all_metrics_df = pd.DataFrame(all_metrics)
+            overall_avg_metrics = all_metrics_df.mean()
+
+            # Log overall average metrics to MLFlow
+            mlflow.start_run(run_name=f"Overall_Avg_{fe_taskname}")
+            mlflow.log_metric("Overall_Avg_Accuracy", overall_avg_metrics['Accuracy'])
+            mlflow.log_metric("Overall_Avg_F1", overall_avg_metrics['F1'])
+            mlflow.log_metric("Overall_Avg_Precision", overall_avg_metrics['Precision'])
+            mlflow.log_metric("Overall_Avg_Recall", overall_avg_metrics['Recall'])
+            mlflow.log_metric("Overall_Avg_AUC", overall_avg_metrics['AUC'])
+            mlflow.end_run()
+
+    return all_metrics_df, cumulative_cm
 
 
 def main(args):
@@ -330,7 +328,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--output_dir', type=str, default="./results", help='Path to save results')
     parser.add_argument('--context_aware', default="NCA", type=str, help='Context-aware (CA) or Non-Context-Aware (NCA)')
-    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs for training')
+    parser.add_argument('--epochs', default=200, type=int, help='Number of epochs for training')
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size for training')
     parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
     parser.add_argument('--n_repeats', default=10, type=int, help='Number of Monte Carlo repeats')
