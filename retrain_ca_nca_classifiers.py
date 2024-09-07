@@ -51,12 +51,12 @@ def custom_categorical_cross_entropy(y_pred, y_true, class_weights=None):
     return loss.mean()
 
 
-def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch_size=128, epochs=100, class_weights=None, output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None):
+def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch_size=128, epochs=100, class_weights=None,
+                   output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None, lr=0.0001,
+                   optimizer_type='adam', owd=None, context_aware='NCA'):
+
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     all_metrics = []
-
-    # Set up MLFlow experiment
-    mlflow_server_url = mlflow_server_url
 
     # Set up MLFlow server location, Otherwise location of ./mlruns
     mlflow.set_tracking_uri(mlflow_server_url)
@@ -68,10 +68,17 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
 
         for repeat in range(n_repeats):
             # Start a nested MLFlow run for each repeat
-            with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{fe_taskname}", nested=True):
+            with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}", nested=True):
+                # Log parameters once for the run
+                mlflow.log_param("Learning Rate", lr)
+                mlflow.log_param("Optimizer Type", optimizer_type)
+                mlflow.log_param("Weight Decay", owd if owd is not None else "None")
+                mlflow.log_param("Number of Epochs", epochs)
+                mlflow.log_param("Batch Size", batch_size)
+                mlflow.log_param("Context Aware", context_aware)
+                mlflow.log_param("Task", fe_taskname)
                 mlflow.log_param("Folds", n_folds)
                 mlflow.log_param("Repeats", n_repeats)
-                mlflow.log_param("Task", fe_taskname)
 
                 fold_metrics = []  # Store metrics for each fold in the current repeat
                 cumulative_cm = None  # To store the accumulated confusion matrix
@@ -97,8 +104,11 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                     X_test, y_test = torch.tensor(X_test, dtype=torch.float32).to('cuda'), torch.tensor(y_test).to('cuda')
 
                     classifier = classifier.to('cuda')
-                    optimizer = torch.optim.Adam(classifier.parameters(), lr=0.0001)
-                    #optimizer = torch.optim.SGD(classifier.parameters, lr=0.0000001)
+
+                    if optimizer_type == "adam":
+                        optimizer = torch.optim.Adam(classifier.parameters(), lr=lr, weight_decay=owd)
+                    elif optimizer_type == "sgd":
+                        optimizer = torch.optim.SGD(classifier.parameters, lr=lr, weight_decay=owd)
 
                     # Re-train the classifier for each fold
                     for epoch in range(epochs):
@@ -188,7 +198,7 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
             overall_avg_metrics = all_metrics_df.mean()
 
             # Log overall average metrics to MLFlow
-            mlflow.start_run(run_name=f"Overall_Avg_{fe_taskname}")
+            mlflow.start_run(run_name=f"Overall_Avg_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}")
             mlflow.log_metric("Overall_Avg_Accuracy", overall_avg_metrics['Accuracy'])
             mlflow.log_metric("Overall_Avg_F1", overall_avg_metrics['F1'])
             mlflow.log_metric("Overall_Avg_Precision", overall_avg_metrics['Precision'])
@@ -305,11 +315,24 @@ def main(args):
         classifier = model.classifier
 
         # Perform Monte Carlo CV and log results
-        metrics_df, cumulative_cm = monte_carlo_cv(tsne_features, all_labels, classifier, fe_taskname,
-                                                   n_folds=args.n_folds, n_repeats=args.n_repeats,
-                                                   batch_size=args.batch_size, epochs=args.epochs,
-                                                   output_dir=args.output_dir, mlflow_experiment_name=args.mlflow_experiment_name,
-                                                   mlflow_server_url=args.mlflow_server_url)
+        # Perform Monte Carlo CV and log results
+        metrics_df, cumulative_cm = monte_carlo_cv(
+            tsne_features,
+            all_labels,
+            classifier,
+            fe_taskname,
+            n_folds=args.n_folds,
+            n_repeats=args.n_repeats,
+            batch_size=args.batch_size,
+            epochs=args.epochs,
+            output_dir=args.output_dir,
+            mlflow_experiment_name=args.mlflow_experiment_name,
+            mlflow_server_url=args.mlflow_server_url,
+            lr=args.lr,  # pass the learning rate
+            optimizer_type=args.optimizer_type,  # pass the optimizer type
+            owd=args.owd,  # pass the weight decay if any
+            context_aware=args.context_aware  # pass whether CA or NCA
+        )
 
         # Save metrics
         metrics_output_path = os.path.join(args.output_dir, f"metrics_{fe_taskname}.csv")
@@ -320,14 +343,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # MLFlow configuration
-    parser.add_argument("--mlflow_experiment_name", default="Experimento Final", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="Experimento Final CA", type=str,
                         help='Name for experiment in MLFlow') #[Final] Classifier on Final CBDC 06_09_2024
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
     # General params
 
     parser.add_argument('--output_dir', type=str, default="./results", help='Path to save results')
-    parser.add_argument('--context_aware', default="NCA", type=str, help='Context-aware (CA) or Non-Context-Aware (NCA)')
+    parser.add_argument('--context_aware', default="CA", type=str, help='Context-aware (CA) or Non-Context-Aware (NCA)')
     parser.add_argument('--epochs', default=200, type=int, help='Number of epochs for training')
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size for training')
     parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
@@ -336,6 +359,11 @@ if __name__ == "__main__":
     parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_november_23", type=str, help='Directory where graphs are stored')
     parser.add_argument('--knn', default=19, type=int, help='KNN used to store graphs')
     parser.add_argument('--pretrained_model_path', type=str, help='Path to pretrained model')
+    parser.add_argument('--lr', default=0.0001, type=float, help='Learning rate of the classifier')
+    parser.add_argument('--optimizer_type', default="adam", type=str, help='Optimizer type')
+    parser.add_argument('--owd', default=None, type=float, help='Optimizer weight decay')
+
+
 
     args = parser.parse_args()
     main(args)
