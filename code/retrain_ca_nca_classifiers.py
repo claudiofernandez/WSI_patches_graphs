@@ -12,6 +12,7 @@ import seaborn as sns
 from sklearn.utils.class_weight import compute_class_weight
 import re
 from collections import Counter
+import itertools
 
 
 def plot_confusion_matrix(cm, labels, fe_taskname, cm_image_path):
@@ -35,7 +36,7 @@ def plot_confusion_matrix(cm, labels, fe_taskname, cm_image_path):
     plt.savefig(cm_image_path, bbox_inches='tight')
 
     # Show the plot
-    plt.show()
+    #plt.show()
 
     # Close the plot to free up memory
     plt.close(fig)
@@ -68,7 +69,7 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
 
         for repeat in range(n_repeats):
             # Start a nested MLFlow run for each repeat
-            with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}", nested=True):
+            with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}", nested=True):
                 # Log parameters once for the run
                 mlflow.log_param("Learning Rate", lr)
                 mlflow.log_param("Optimizer Type", optimizer_type)
@@ -198,7 +199,18 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
             overall_avg_metrics = all_metrics_df.mean()
 
             # Log overall average metrics to MLFlow
-            mlflow.start_run(run_name=f"Overall_Avg_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}")
+            mlflow.start_run(run_name=f"Overall_Avg_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}")
+
+            mlflow.log_param("Learning Rate", lr)
+            mlflow.log_param("Optimizer Type", optimizer_type)
+            mlflow.log_param("Weight Decay", owd if owd is not None else "None")
+            mlflow.log_param("Number of Epochs", epochs)
+            mlflow.log_param("Batch Size", batch_size)
+            mlflow.log_param("Context Aware", context_aware)
+            mlflow.log_param("Task", fe_taskname)
+            mlflow.log_param("Folds", n_folds)
+            mlflow.log_param("Repeats", n_repeats)
+
             mlflow.log_metric("Overall_Avg_Accuracy", overall_avg_metrics['Accuracy'])
             mlflow.log_metric("Overall_Avg_F1", overall_avg_metrics['F1'])
             mlflow.log_metric("Overall_Avg_Precision", overall_avg_metrics['Precision'])
@@ -343,18 +355,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # MLFlow configuration
-    parser.add_argument("--mlflow_experiment_name", default="Experimento Final CA", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[07092024] HPSearch Classifiers", type=str,
                         help='Name for experiment in MLFlow') #[Final] Classifier on Final CBDC 06_09_2024
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
     # General params
-
     parser.add_argument('--output_dir', type=str, default="./results", help='Path to save results')
     parser.add_argument('--context_aware', default="CA", type=str, help='Context-aware (CA) or Non-Context-Aware (NCA)')
     parser.add_argument('--epochs', default=200, type=int, help='Number of epochs for training')
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size for training')
-    parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
-    parser.add_argument('--n_repeats', default=10, type=int, help='Number of Monte Carlo repeats')
+    parser.add_argument('--n_folds', default=2, type=int, help='Number of folds for Monte Carlo CV')
+    parser.add_argument('--n_repeats', default=2, type=int, help='Number of Monte Carlo repeats')
     parser.add_argument('--gt_path', default="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx", type=str, help='Path to ground truth file')
     parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_november_23", type=str, help='Directory where graphs are stored')
     parser.add_argument('--knn', default=19, type=int, help='KNN used to store graphs')
@@ -363,7 +374,30 @@ if __name__ == "__main__":
     parser.add_argument('--optimizer_type', default="adam", type=str, help='Optimizer type')
     parser.add_argument('--owd', default=None, type=float, help='Optimizer weight decay')
 
-
-
+    # Parse the fixed arguments
     args = parser.parse_args()
-    main(args)
+
+    # Lists of hyperparameters to loop over
+    lrs = [0.01, 0.001, 0.0001, 0.00001, 0.000001]
+    optimizers = ["adam", "sgd"]
+    owds = [0.01, 0.001, 0.0001, 0.00001, 0.000001]
+    epochs = [200, 500]
+    batch_sizes = [64, 128, 256]
+    context_awareness = ["CA", "NCA"]
+
+
+    # Generate all combinations of lrs, optimizers, owds, epochs, and batch_sizes
+    for lr, optimizer, owd, epoch, batch_size, context_aware in itertools.product(lrs, optimizers, owds, epochs, batch_sizes,context_awareness):
+        # Update the args object with the new hyperparameter values
+        args.lr = lr
+        args.optimizer_type = optimizer
+        args.owd = owd
+        args.epochs = epoch
+        args.batch_size = batch_size
+        args.context_aware = context_aware
+
+        # Print out the current combination (for debugging purposes)
+        print(f"Running with lr={lr}, optimizer={optimizer}, owd={owd}, epochs={epoch}, batch_size={batch_size}")
+
+        # Call the main function with the updated args
+        main(args)
