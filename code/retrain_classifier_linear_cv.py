@@ -140,14 +140,17 @@ def main(args):
 
     # Read ground truth
     #gt_df = pd.read_excel("../data/BCNB/ground_truth/patient-clinical-data.xlsx")
-    gt_df = pd.read_excel("../data/CLARIFY/ground_truth/final_clinical_info_CLARIFY_DB.xlsx")
+    #gt_df = pd.read_excel("../data/CLARIFY/ground_truth/final_clinical_info_CLARIFY_DB.xlsx")
+    gt_df = pd.read_excel("../data/CLARIFY/ground_truth/final_clinical_info_CLARIFY_DB_2024.xlsx")
 
     # Define your classification tasks
     tasks_labels_mappings = {
         "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "Triple negative": 3},
         "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "Triple negative": 2},
-        "OTHERvsTNBC": {"Other": 0, "Triple negative": 1}
-    }
+        "OTHERvsTNBC": {"Other": 0, "Triple negative": 1},
+        "7CLASS": {'Luminal A (ER+, PR+, HER2-)': 0, 'Luminal A (ER+, PR-, HER2-)': 1, 'Luminal B (ER+, PR+, HER2+)': 2,
+                   'Luminal B (ER+, PR-, HER2+)': 3, 'HER2+ (ER-, PR+-, HER2+)': 4, 'HER2+ (ER+, PR+-, HER2+)': 5,
+                   'TNBC (ER-, PR-, HER2-)': 6}}
 
     #Iterate over the graphs
 
@@ -540,7 +543,7 @@ if __name__ == "__main__":
                                 parser = argparse.ArgumentParser()
 
                                 # MLFlow configuration
-                                parser.add_argument("--mlflow_experiment_name", default="[Dev] CV Classifier on CBDC ", type=str,
+                                parser.add_argument("--mlflow_experiment_name", default="[Dev] 7class CV Classifier on CBDC ", type=str,
                                                     help='Name for experiment in MLFlow')
                                 parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 

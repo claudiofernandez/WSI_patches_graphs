@@ -1,5 +1,48 @@
 from MIL_utils import *
 
+
+# Wrapper Model: Attention and Classifier, with optional path_phi training
+class AttentionClassifierModel(torch.nn.Module):
+    def __init__(self, attention, classifier, context_aware='NCA', model=None):
+        super(AttentionClassifierModel, self).__init__()
+        self.attention = attention
+        self.classifier = classifier
+        self.context_aware = context_aware
+
+        if self.context_aware == 'CA' and model is not None:
+            self.path_phi = model.path_phi  # Include path_phi layer
+            self.path_rho = model.path_rho  # Include path_rho layer
+            self.layers = model.layers  # GCN layers for CA model
+
+    def forward(self, x):
+        if self.context_aware == 'NCA':
+            # Apply NCA-specific attention first, then classifier
+            attention_output = self.attention(x)
+            classifier_output = self.classifier(attention_output)
+        else:
+            # For CA, process the graph without pooling, pass node embeddings to attention
+            graph_node_embeddings = []
+            for graph in tqdm(x):
+                # Apply GCN layers to get node embeddings
+                node_embeddings = graph.x  # Assuming node features are in graph.x
+                for layer in self.layers:
+                    node_embeddings = layer(node_embeddings, graph.edge_index)
+
+                # Collect the node embeddings for the attention mechanism
+                graph_node_embeddings.append(node_embeddings)
+
+            # Now pass node embeddings through path_phi, attention, and path_rho
+            graph_node_embeddings = torch.cat(graph_node_embeddings, dim=0)  # Concatenate nodes from all graphs
+            phi_output = self.path_phi(graph_node_embeddings)
+            attention_output = self.attention(phi_output)  # Apply attention over nodes
+            rho_output = self.path_rho(attention_output)   # Aggregation after attention
+            classifier_output = self.classifier(rho_output)
+
+        return classifier_output
+
+
+
+
 ###################
 # SIMCLR Models   #
 ###################
