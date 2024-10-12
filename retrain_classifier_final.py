@@ -2,6 +2,7 @@ from MIL_utils import *
 from sklearn.datasets import load_iris, load_breast_cancer
 from sklearn.model_selection import train_test_split
 import os
+import re
 import sklearn.linear_model
 import sklearn.naive_bayes
 import sklearn.neighbors
@@ -83,15 +84,17 @@ def custom_categorical_cross_entropy(y_pred, y_true, class_weights=None, loss_fu
         loss_not_balanced = torch.nn.MSELoss()
 
     # Compute the unweighted loss using the chosen loss function.
-    try:
-        loss = loss_not_balanced(y_pred, y_true)
-        y_pred_hat = torch.argmax(y_pred, dim=1)
 
+    loss = loss_not_balanced(y_pred, y_true)
+    y_pred_hat = torch.argmax(y_pred, dim=1)
+
+    try:
         # If class weights are specified, compute the weight for the actual class and apply it to the loss.
         if class_weights is not None:
             weight_actual_class = class_weights[y_true]
             loss = loss * weight_actual_class
     except RuntimeError:
+        return loss.mean()
         print("hola")
 
     # Return the computed loss.
@@ -140,7 +143,9 @@ def main(args):
 
     # Read ground truth
     #gt_df = pd.read_excel("../data/BCNB/ground_truth/patient-clinical-data.xlsx")
-    gt_df = pd.read_excel("../data/CLARIFY/ground_truth/final_clinical_info_CLARIFY_DB.xlsx")
+    #gt_df = pd.read_excel("../data/CLARIFY/ground_truth/final_clinical_info_CLARIFY_DB.xlsx")
+    gt_df = pd.read_excel("../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx")
+
 
     # Define your classification tasks
     tasks_labels_mappings = {
@@ -161,6 +166,7 @@ def main(args):
 
     graphs_dirs = os.listdir(args.graphs_dir)
     #graphs_dirs.reverse()
+
 
     for graph_dirname in graphs_dirs:
 
@@ -190,6 +196,30 @@ def main(args):
         graphs_knn_dir = os.path.join(args.graphs_dir, graph_dirname, "graphs_k_" + str(args.knn))
         print("Chosen graphs: ", graphs_knn_dir)
         graphs_files = os.listdir(graphs_knn_dir)
+
+
+        # Filter out graphs that are "Excluded"
+        # Extract patient IDs from filenames
+        def extract_patient_id(filename):
+            match = re.search(r'(SUS\d+)', filename)
+            return match.group(1) if match else None
+
+        # Create a DataFrame from the graph files list
+        graph_files_df = pd.DataFrame({
+            'filename': graphs_files,
+            'SUS_number': [extract_patient_id(filename) for filename in graphs_files]
+        })
+
+        # Merge the graph files DataFrame with the ground truth DataFrame
+        merged_df = pd.merge(graph_files_df, gt_df, on='SUS_number', how='inner')
+
+        # Filter out rows where Molsub_surr_3clf is "Excluded"
+        filtered_df = merged_df[merged_df['Molsub_surr_7clf'] != 'Excluded']
+
+        # Extract the filenames from the filtered DataFrame
+        filtered_files = filtered_df['filename'].tolist()
+
+        graphs_files = filtered_files
 
         # Initialize lists to store features, labels, and task labels
         all_features = []
@@ -235,7 +265,7 @@ def main(args):
 
             # Find matching label for graph
             #id_label = gt_df[gt_df["Patient ID"] == int(file_id)]["Molecular subtype"].values[0]
-            id_label = gt_df[gt_df["SUS_number"] == file_id]["MolSubtype_surr"].values[0]
+            id_label = gt_df[gt_df["SUS_number"] == file_id]["Molsub_surr_4clf"].values[0]
 
             # Encode task label to numeric value
             encoded_task_label = task_labels_mapping.get(id_label, 0)  # Use 0 as a default value if the label is not found
@@ -299,7 +329,7 @@ def main(args):
 
         # Split data into training-validation-test sets
         X_train_all, X_test, Y_train_all, Y_test = train_test_split(tsne_features, all_labels, test_size=args.test_size,
-                                                                    random_state=args.seed)
+                                                                    random_state=args.seed, stratify=all_labels)
 
         # Split data into training and validation sets for the current fold
         X_train, Y_train = X_train_all, Y_train_all
@@ -474,8 +504,8 @@ def main(args):
 if __name__ == "__main__":
 
     optimizers = ["adam"] #, "sgd"]
-    lrs = [0.001] # [0.01, 0.001, 0.0001, 0.00001]
-    owds = [0.001, 0.0001, 0.00001]# [0, 0.1, 0.01, 0.001, 0.0001, 0.00001]
+    lrs = [0.001, 0.0001, 0.00001] #[0.001]
+    owds = [ 0.0001, 0.00001]# [0, 0.1, 0.01, 0.001, 0.0001, 0.00001]
     batch_sizes = [64, 128]
     hidden_sizes = [[128], [256]]# [[256], [128], [64]]
     activations = [[nn.ReLU()], [nn.Tanh()]]
@@ -494,7 +524,7 @@ if __name__ == "__main__":
                                 parser = argparse.ArgumentParser()
 
                                 # MLFlow configuration
-                                parser.add_argument("--mlflow_experiment_name", default="[Dev] Classifier on Final CBDC ", type=str,
+                                parser.add_argument("--mlflow_experiment_name", default="[Dev] Classifier on Final CBDC 28_07 ", type=str,
                                                     help='Name for experiment in MLFlow')
                                 parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
