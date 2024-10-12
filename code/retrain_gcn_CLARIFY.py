@@ -13,10 +13,11 @@ from sklearn.utils.class_weight import compute_class_weight
 import re
 from collections import Counter
 import itertools
+from MIL_data import *
+from torch.utils.data import Subset, DataLoader
 
 
 def plot_confusion_matrix(cm, labels, fe_taskname, cm_image_path):
-
     if fe_taskname == "LUMINALAvsLAUMINALBvsHER2vsTNBC":
         class2idx = {0: 'Luminal A', 1: 'Luminal B', 2: 'Her2(+)', 3: 'TNBC'}
     elif fe_taskname == "LUMINALSvsHER2vsTNBC":
@@ -31,15 +32,15 @@ def plot_confusion_matrix(cm, labels, fe_taskname, cm_image_path):
 
     plt.title(f'Confusion Matrix - {fe_taskname}')
 
-
     # Save the figure to the provided path
     plt.savefig(cm_image_path, bbox_inches='tight')
 
     # Show the plot
-    #plt.show()
+    # plt.show()
 
     # Close the plot to free up memory
     plt.close(fig)
+
 
 def custom_categorical_cross_entropy(y_pred, y_true, class_weights=None):
     """
@@ -52,10 +53,10 @@ def custom_categorical_cross_entropy(y_pred, y_true, class_weights=None):
     return loss.mean()
 
 
-def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch_size=128, epochs=100, class_weights=None,
-                   output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None, lr=0.0001,
-                   optimizer_type='adam', owd=None, context_aware='NCA'):
-
+def monte_carlo_cv(dataset, model, fe_taskname, n_folds=5, n_repeats=10, batch_size=128, epochs=100,
+                   class_weights=None, output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None,
+                   lr=0.0001,
+                   optimizer_type='adam', owd=None, context_aware='CA'):
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     all_metrics = []
 
@@ -63,13 +64,18 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
     mlflow.set_tracking_uri(mlflow_server_url)
     mlflow.set_experiment(experiment_name=mlflow_experiment_name)
 
+    # Extract labels from the dataset
+    labels = dataset.labels
+
     # Create a file to store the fold and repeat indices
     indices_save_path = os.path.join(output_dir, f"train_test_indices_{fe_taskname}.txt")
     with open(indices_save_path, 'w') as index_file:
 
         for repeat in range(n_repeats):
             # Start a nested MLFlow run for each repeat
-            with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}", nested=True):
+            with mlflow.start_run(
+                    run_name=f"Repeat_{repeat + 1}_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}",
+                    nested=True):
                 # Log parameters once for the run
                 mlflow.log_param("Learning Rate", lr)
                 mlflow.log_param("Optimizer Type", optimizer_type)
@@ -84,7 +90,7 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                 fold_metrics = []  # Store metrics for each fold in the current repeat
                 cumulative_cm = None  # To store the accumulated confusion matrix
 
-                for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
+                for fold, (train_index, test_index) in enumerate(skf.split(np.zeros(len(labels)), labels)):
                     print(f"Fold {fold + 1}/{n_folds}")
 
                     # Log the indices of the training and test set for reproducibility
@@ -96,25 +102,55 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                     mlflow.log_text(str(train_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_train_indices.txt")
                     mlflow.log_text(str(test_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_test_indices.txt")
 
-                    # Split the dataset into training and testing for this fold
-                    X_train, X_test = X[train_index], X[test_index]
-                    y_train, y_test = y[train_index], y[test_index]
+                    # Create DataLoaders for the train and test sets
+                    train_subset = Subset(dataset, train_index)
+                    test_subset = Subset(dataset, test_index)
 
-                    # Convert to PyTorch tensors
-                    X_train, y_train = torch.tensor(X_train, dtype=torch.float32).to('cuda'), torch.tensor(y_train).to('cuda')
-                    X_test, y_test = torch.tensor(X_test, dtype=torch.float32).to('cuda'), torch.tensor(y_test).to('cuda')
+                    if fe_taskname == "LUMINALAvsLAUMINALBvsHER2vsTNBC":
+                        pred_column = "Molsub_surr_4clf"
+                    elif fe_taskname == "LUMINALSvsHER2vsTNBC":
+                        pred_column = "Molsub_surr_3clf"
+                    elif fe_taskname == "OTHERvsTNBC":
+                        pred_column = "Molsub_surr_3clf"  # We subclassify between 2 classes later in the Data Generator
 
-                    classifier = classifier.to('cuda')
+                    pred_column = "Molsub_surr_4clf"
+
+                    train_loader = MILDataGenerator_offline_graphs(dataset=train_subset,
+                                                                   pred_column=pred_column,
+                                                                   pred_mode=fe_taskname,
+                                                                   graphs_on_ram=True,
+                                                                   shuffle=True)
+
+                    test_loader = MILDataGenerator_offline_graphs(dataset=test_subset,
+                                                                  pred_column=pred_column,
+                                                                  pred_mode=fe_taskname,
+                                                                  graphs_on_ram=True,
+                                                                  shuffle=False)
+
+                    # # Iterate over the train_loader and test_loader to test the data generators
+                    # for phase, loader in [('train', train_loader), ('test', test_loader)]:
+                    #     print(f"\n--- {phase.upper()} LOADER ---")
+                    #     for idx, (graph, label) in enumerate(loader):
+                    #         print(f"Batch {idx + 1}:")
+                    #         print("Graph:", graph)
+                    #         print("Label:", label)
+                    #
+                    #         # Optionally, limit the number of iterations for testing purposes
+                    #         if idx >= 2:  # Only show first 3 batches
+                    #             break
+
+                    model = model.to('cuda')
 
                     if optimizer_type == "adam":
-                        optimizer = torch.optim.Adam(classifier.parameters(), lr=lr, weight_decay=owd)
+                        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=owd)
                     elif optimizer_type == "sgd":
-                        optimizer = torch.optim.SGD(classifier.parameters, lr=lr, weight_decay=owd)
+                        optimizer = torch.optim.SGD(model.parameters, lr=lr, weight_decay=owd)
 
                     # Re-train the classifier for each fold
                     for epoch in range(epochs):
-                        classifier.train()
+                        model.train()
                         epoch_loss = 0
+
                         for i in range(0, len(X_train), batch_size):
                             X_batch = X_train[i:i + batch_size]
                             y_batch = y_train[i:i + batch_size]
@@ -129,7 +165,7 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
 
                         # Log training metrics after each epoch
                         avg_epoch_loss = epoch_loss / len(X_train)
-                        mlflow.log_metric("Train_Loss_"+str(fold), float(np.round(avg_epoch_loss, 4)), step=epoch)
+                        mlflow.log_metric("Train_Loss_" + str(fold), float(np.round(avg_epoch_loss, 4)), step=epoch)
 
                     # Evaluate on the test set
                     classifier.eval()
@@ -158,11 +194,11 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                             cumulative_cm += cm
 
                         # Log test metrics
-                        mlflow.log_metric(f"Test_Accuracy_Repeat_{repeat+1}_Fold_{fold+1}", acc)
-                        mlflow.log_metric(f"Test_F1_Repeat_{repeat+1}_Fold_{fold+1}", f1)
-                        mlflow.log_metric(f"Test_Precision_Repeat_{repeat+1}_Fold_{fold+1}", precision)
-                        mlflow.log_metric(f"Test_Recall_Repeat_{repeat+1}_Fold_{fold+1}", recall)
-                        mlflow.log_metric(f"Test_AUC_Repeat_{repeat+1}_Fold_{fold+1}", auc)
+                        mlflow.log_metric(f"Test_Accuracy_Repeat_{repeat + 1}_Fold_{fold + 1}", acc)
+                        mlflow.log_metric(f"Test_F1_Repeat_{repeat + 1}_Fold_{fold + 1}", f1)
+                        mlflow.log_metric(f"Test_Precision_Repeat_{repeat + 1}_Fold_{fold + 1}", precision)
+                        mlflow.log_metric(f"Test_Recall_Repeat_{repeat + 1}_Fold_{fold + 1}", recall)
+                        mlflow.log_metric(f"Test_AUC_Repeat_{repeat + 1}_Fold_{fold + 1}", auc)
 
                         fold_metrics.append({
                             'Repeat': repeat,
@@ -177,19 +213,20 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                 # Log the average metrics for this repeat
                 fold_metrics_df = pd.DataFrame(fold_metrics)
                 avg_fold_metrics = fold_metrics_df.mean()
-                mlflow.log_metric(f"Avg_Accuracy_Repeat_{repeat+1}", avg_fold_metrics['Accuracy'])
-                mlflow.log_metric(f"Avg_F1_Repeat_{repeat+1}", avg_fold_metrics['F1'])
-                mlflow.log_metric(f"Avg_Precision_Repeat_{repeat+1}", avg_fold_metrics['Precision'])
-                mlflow.log_metric(f"Avg_Recall_Repeat_{repeat+1}", avg_fold_metrics['Recall'])
-                mlflow.log_metric(f"Avg_AUC_Repeat_{repeat+1}", avg_fold_metrics['AUC'])
+                mlflow.log_metric(f"Avg_Accuracy_Repeat_{repeat + 1}", avg_fold_metrics['Accuracy'])
+                mlflow.log_metric(f"Avg_F1_Repeat_{repeat + 1}", avg_fold_metrics['F1'])
+                mlflow.log_metric(f"Avg_Precision_Repeat_{repeat + 1}", avg_fold_metrics['Precision'])
+                mlflow.log_metric(f"Avg_Recall_Repeat_{repeat + 1}", avg_fold_metrics['Recall'])
+                mlflow.log_metric(f"Avg_AUC_Repeat_{repeat + 1}", avg_fold_metrics['AUC'])
 
                 # Accumulate metrics across repeats
                 all_metrics.extend(fold_metrics)
 
                 # Save cumulative confusion matrix after each repeat
-                cm_image_path = os.path.join(output_dir, f"cumulative_confusion_matrix_repeat_{repeat+1}.png")
-                plot_confusion_matrix(cumulative_cm, labels=np.unique(y), fe_taskname=fe_taskname, cm_image_path=cm_image_path)
-                mlflow.log_artifact(cm_image_path, f"confusion_matrices/repeat_{repeat+1}")
+                cm_image_path = os.path.join(output_dir, f"cumulative_confusion_matrix_repeat_{repeat + 1}.png")
+                plot_confusion_matrix(cumulative_cm, labels=np.unique(y), fe_taskname=fe_taskname,
+                                      cm_image_path=cm_image_path)
+                mlflow.log_artifact(cm_image_path, f"confusion_matrices/repeat_{repeat + 1}")
 
                 # End MLFlow run after each repeat
                 mlflow.end_run()
@@ -199,7 +236,8 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
             overall_avg_metrics = all_metrics_df.mean()
 
             # Log overall average metrics to MLFlow
-            mlflow.start_run(run_name=f"Overall_Avg_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}")
+            mlflow.start_run(
+                run_name=f"Overall_Avg_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}")
 
             mlflow.log_param("Learning Rate", lr)
             mlflow.log_param("Optimizer Type", optimizer_type)
@@ -228,15 +266,13 @@ def main(args):
     gt_df = pd.read_excel(args.gt_path)
     graphs_dirs = os.listdir(args.graphs_dir)
 
-
-
     tasks_labels_mappings = {
         "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "TNBC": 3},
         "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "TNBC": 2},
         "OTHERvsTNBC": {"Other": 0, "TNBC": 1}
     }
 
-    #Iterate over the graphs
+    # Iterate over the graphs
 
     if args.context_aware == "NCA":
         args.feature_extractors_dir = "../data/feature_extractors"
@@ -260,10 +296,12 @@ def main(args):
 
             try:
                 if args.context_aware == "NCA":
-                    chosen_model = [fe_name for fe_name in os.listdir(args.feature_extractors_dir) if fe_taskname in fe_name][0]
+                    chosen_model = \
+                    [fe_name for fe_name in os.listdir(args.feature_extractors_dir) if fe_taskname in fe_name][0]
                     chosen_model_path = os.path.join(args.feature_extractors_dir, chosen_model)
                 elif args.context_aware == "CA":
-                    chosen_model = [fe_name for fe_name in os.listdir(args.pretrained_gcn_models_dir) if fe_taskname in fe_name][0]
+                    chosen_model = \
+                    [fe_name for fe_name in os.listdir(args.pretrained_gcn_models_dir) if fe_taskname in fe_name][0]
                     args.knn = chosen_model.split("KNN_")[1].split("_")[0]
                     chosen_model_path = os.path.join(args.pretrained_gcn_models_dir, chosen_model)
             except IndexError:
@@ -274,81 +312,31 @@ def main(args):
             # Load the model for this task
             model = torch.load(chosen_model_path).to('cuda')
 
-            # Load graphs for the task
-            graphs_knn_dir = os.path.join(args.graphs_dir, graph_dirname, "graphs_k_" + str(args.knn))
-            graphs_files = os.listdir(graphs_knn_dir)
+            dataset = MILDataset_offline_graphs(args=args, graph_dirname=graph_dirname,
+                                                gt_df=gt_df, task_labels_mapping=task_labels_mapping,
+                                                graphs_on_ram=True)
 
-            # Extract patient IDs from filenames
-            def extract_patient_id(filename):
-                match = re.search(r'(SUS\d+)', filename)
-                return match.group(1) if match else None
+            # Perform Monte Carlo CV and log results
+            metrics_df, cumulative_cm = monte_carlo_cv(
+                dataset,
+                model,
+                fe_taskname,
+                n_folds=args.n_folds,
+                n_repeats=args.n_repeats,
+                batch_size=args.batch_size,
+                epochs=args.epochs,
+                output_dir=args.output_dir,
+                mlflow_experiment_name=args.mlflow_experiment_name,
+                mlflow_server_url=args.mlflow_server_url,
+                lr=args.lr,  # pass the learning rate
+                optimizer_type=args.optimizer_type,  # pass the optimizer type
+                owd=args.owd,  # pass the weight decay if any
+                context_aware=args.context_aware  # pass whether CA or NCA
+            )
 
-            # Create a DataFrame of graph files and their corresponding SUS numbers
-            graph_files_df = pd.DataFrame({
-                'filename': graphs_files,
-                'SUS_number': [extract_patient_id(filename) for filename in graphs_files]
-            })
-
-            # Merge with the ground truth DataFrame to get labels and filter the excluded samples
-            merged_df = pd.merge(graph_files_df, gt_df, on='SUS_number', how='inner')
-            filtered_df = merged_df[merged_df['Molsub_surr_7clf'] != 'Excluded']
-
-            # For each graph, collect features and labels
-            for graph_name in filtered_df['filename'].tolist():
-                file_id = graph_name.split("-")[0].split("HE")[0].split("_")[0].split("a")[0]
-                file_path = os.path.join(graphs_knn_dir, graph_name)
-
-                # Load the graph
-                graph = torch.load(file_path).to('cuda')
-                graph_features = graph["x"].to('cuda')
-
-                with torch.no_grad():
-                    if args.context_aware == "NCA":
-                        case_aggr_feature_vector = model.milAggregation(graph_features)
-                    elif args.context_aware == "CA":
-                        _, _, _, case_aggr_feature_vector = model(graph)
-
-                # Get the corresponding label for this case
-                id_label = gt_df[gt_df["SUS_number"] == file_id]["Molsub_surr_4clf"].values[0]
-                encoded_task_label = task_labels_mapping.get(id_label, 0)
-
-                # Add the feature and label for this graph
-                all_features.append(case_aggr_feature_vector.cpu().detach().numpy())
-                all_labels.append(encoded_task_label)
-
-        # Ensure the data is collected correctly
-        assert len(all_features) == len(all_labels) == 534, f"Data size mismatch for task {fe_taskname}!"
-
-        # Convert the features and labels to NumPy arrays
-        tsne_features = np.stack(all_features)
-        all_labels = np.array(all_labels)
-
-        # Load the pretrained classifier
-        classifier = model.classifier
-
-        # Perform Monte Carlo CV and log results
-        # Perform Monte Carlo CV and log results
-        metrics_df, cumulative_cm = monte_carlo_cv(
-            tsne_features,
-            all_labels,
-            classifier,
-            fe_taskname,
-            n_folds=args.n_folds,
-            n_repeats=args.n_repeats,
-            batch_size=args.batch_size,
-            epochs=args.epochs,
-            output_dir=args.output_dir,
-            mlflow_experiment_name=args.mlflow_experiment_name,
-            mlflow_server_url=args.mlflow_server_url,
-            lr=args.lr,  # pass the learning rate
-            optimizer_type=args.optimizer_type,  # pass the optimizer type
-            owd=args.owd,  # pass the weight decay if any
-            context_aware=args.context_aware  # pass whether CA or NCA
-        )
-
-        # Save metrics
-        metrics_output_path = os.path.join(args.output_dir, f"metrics_{fe_taskname}.csv")
-        metrics_df.to_csv(metrics_output_path, index=False)
+            # Save metrics
+            metrics_output_path = os.path.join(args.output_dir, f"metrics_{fe_taskname}.csv")
+            metrics_df.to_csv(metrics_output_path, index=False)
 
 
 if __name__ == "__main__":
@@ -356,7 +344,7 @@ if __name__ == "__main__":
 
     # MLFlow configuration
     parser.add_argument("--mlflow_experiment_name", default="[07092024] HPSearch Classifiers", type=str,
-                        help='Name for experiment in MLFlow') #[Final] Classifier on Final CBDC 06_09_2024
+                        help='Name for experiment in MLFlow')  # [Final] Classifier on Final CBDC 06_09_2024
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
     # General params
@@ -366,8 +354,10 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size for training')
     parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
     parser.add_argument('--n_repeats', default=10, type=int, help='Number of Monte Carlo repeats')
-    parser.add_argument('--gt_path', default="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx", type=str, help='Path to ground truth file')
-    parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_november_23", type=str, help='Directory where graphs are stored')
+    parser.add_argument('--gt_path', default="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx", type=str,
+                        help='Path to ground truth file')
+    parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_november_23", type=str,
+                        help='Directory where graphs are stored')
     parser.add_argument('--knn', default=19, type=int, help='KNN used to store graphs')
     parser.add_argument('--pretrained_model_path', type=str, help='Path to pretrained model')
     parser.add_argument('--lr', default=0.0001, type=float, help='Learning rate of the classifier')
@@ -385,9 +375,9 @@ if __name__ == "__main__":
     batch_sizes = [64, 128, 256]
     context_awareness = ["CA", "NCA"]
 
-
     # Generate all combinations of lrs, optimizers, owds, epochs, and batch_sizes
-    for lr, optimizer, owd, epoch, batch_size, context_aware in itertools.product(lrs, optimizers, owds, epochs, batch_sizes,context_awareness):
+    for lr, optimizer, owd, epoch, batch_size, context_aware in itertools.product(lrs, optimizers, owds, epochs,
+                                                                                  batch_sizes, context_awareness):
         # Update the args object with the new hyperparameter values
         args.lr = lr
         args.optimizer_type = optimizer
