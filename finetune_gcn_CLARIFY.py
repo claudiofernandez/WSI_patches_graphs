@@ -131,8 +131,6 @@ def monte_carlo_cv(dataset, model, fe_taskname, n_folds=5, n_repeats=10, batch_s
                                                                   shuffle=False,
                                                                   batch_size=batch_size)
 
-                    # Initialize the model and move it to GPU if available
-                    model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
 
                     # Choose optimizer based on the specified optimizer type
                     if optimizer_type == "adam":
@@ -396,7 +394,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # MLFlow configuration
-    parser.add_argument("--mlflow_experiment_name", default="[12102024] Fine-tune GCN on CLARIFY Graphs", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[23102024] Fine-tune GCN on CLARIFY Graphs", type=str,
                         help='Name for experiment in MLFlow')  # [Final] Classifier on Final CBDC 06_09_2024
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
@@ -405,7 +403,7 @@ if __name__ == "__main__":
     parser.add_argument('--context_aware', default="CA", type=str, help='Context-aware (CA) or Non-Context-Aware (NCA)')
     parser.add_argument('--epochs', default=200, type=int, help='Number of epochs for training')
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size for training')
-    parser.add_argument('--n_folds', default=2, type=int, help='Number of folds for Monte Carlo CV')
+    parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
     parser.add_argument('--n_repeats', default=2, type=int, help='Number of Monte Carlo repeats')
     parser.add_argument('--gt_path', default="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx", type=str,
                         help='Path to ground truth file')
@@ -422,7 +420,7 @@ if __name__ == "__main__":
 
     # Lists of hyperparameters to loop over
     lrs = [2e-5, 1e-5, 2e-4, 1e-4]
-    optimizers = ['adam', 'sgd']
+    optimizers = ['adam'] #, 'sgd']
     owds = [1e-05]
     epochs = [100]
     batch_sizes = [1]
