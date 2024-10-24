@@ -419,7 +419,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Lists of hyperparameters to loop over
-    lrs = [2e-5, 1e-5, 2e-4, 1e-4]
+    lrs = [1e-6, 2e-6, 1e-5, 2e-5, 1e-4, 2e-4]
     optimizers = ['adam'] #, 'sgd']
     owds = [1e-05]
     epochs = [100]
