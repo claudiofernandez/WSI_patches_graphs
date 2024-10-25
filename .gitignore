@@ -2,5 +2,5 @@
 /output/
 /wsi_patches_graphs_venv/
 /.idea/
-requirements.txt
+code/requirements.txt
 /__pycache__
