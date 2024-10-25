@@ -3,3 +3,4 @@
 /wsi_patches_graphs_venv/
 /.idea/
 requirements.txt
+/__pycache__
