@@ -483,7 +483,7 @@ if __name__ == "__main__":
     args.context_awareness = ['CA']
     args.gcn_layer_types = ['GCNConv', 'GENConv', 'SAGEConv', 'GINConv']
     args.num_gcn_layers_list = [4, 5]
-    args.graph_pooling_types = ['max'] # 'mean', 'max', 'attention'
+    args.graph_pooling_types = ['attention'] # 'mean', 'max', 'attention'
     args.knn_values = [8, 19, 25]
 
     main(args)
