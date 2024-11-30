@@ -476,7 +476,7 @@ if __name__ == "__main__":
 
     # Define hyperparameter lists
     args.lrs = [1e-6, 2e-6, 1e-5, 2e-5, 1e-4, 2e-4, 1e-3]
-    args.optimizers = ['sgd']
+    args.optimizers = ['adam', 'sgd']
     args.owds = [1e-4, 1e-3, 1e-5]
     args.epochs_list = [200]
     args.batch_sizes = [1]
