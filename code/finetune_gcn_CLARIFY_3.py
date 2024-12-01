@@ -56,7 +56,7 @@ def custom_categorical_cross_entropy(logits, y_true, class_weights=None):
 
 def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, batch_size=128, epochs=100,
                    class_weights=None, output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None,
-                   lr=0.0001, optimizer_type='adam', owd=None, context_aware='CA'):
+                   lr=0.0001, optimizer_type='adam', owd=None, context_aware='CA', patience=30):
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     all_metrics = []
 
@@ -82,12 +82,13 @@ def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, b
             with mlflow.start_run(
                     run_name=f"Repeat_{repeat + 1}_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}",
                     nested=True):
-                # Log parameters once for the run
+                # Log parameters
                 mlflow.log_param("Learning Rate", lr)
                 mlflow.log_param("Optimizer Type", optimizer_type)
                 mlflow.log_param("Weight Decay", owd if owd is not None else "None")
                 mlflow.log_param("Number of Epochs", epochs)
                 mlflow.log_param("Batch Size", batch_size)
+                mlflow.log_param("Early Stopping Patience", patience)
                 mlflow.log_param("Context Aware", context_aware)
                 mlflow.log_param("Task", fe_taskname)
                 mlflow.log_param("Folds", n_folds)
@@ -98,36 +99,35 @@ def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, b
                 mlflow.log_param("Edge Features", model_params["include_edge_features"])
                 mlflow.log_param("Dropout", model_params["dropout"])
 
-                fold_metrics = []  # Store metrics for each fold in the current repeat
-                cumulative_cm = None  # To store the accumulated confusion matrix
+                fold_metrics = []
+                cumulative_cm = None
 
                 for fold, (train_index, test_index) in enumerate(skf.split(np.zeros(len(labels)), labels)):
                     print(f"Fold {fold + 1}/{n_folds}")
 
-                    # Log the indices of the training and test set for reproducibility
+                    # Log indices
                     index_file.write(f"Repeat {repeat + 1}, Fold {fold + 1}\n")
                     index_file.write(f"Train indices: {train_index.tolist()}\n")
                     index_file.write(f"Test indices: {test_index.tolist()}\n\n")
 
-                    # Log the train/test indices in MLFlow as well
                     mlflow.log_text(str(train_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_train_indices.txt")
                     mlflow.log_text(str(test_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_test_indices.txt")
 
-                    # Create Subsets for the train and test sets
+                    # Create Subsets
                     train_subset = Subset(dataset, train_index)
                     test_subset = Subset(dataset, test_index)
 
-                    # Determine prediction column based on task name
+                    # Determine prediction column
                     if fe_taskname == "LUMINALAvsLUMINALBvsHER2vsTNBC":
                         pred_column = "Molsub_surr_4clf"
                     elif fe_taskname == "LUMINALSvsHER2vsTNBC":
                         pred_column = "Molsub_surr_3clf"
                     elif fe_taskname == "OTHERvsTNBC":
-                        pred_column = "Molsub_surr_3clf"  # We subclassify between 2 classes later in the Data Generator
+                        pred_column = "Molsub_surr_3clf"
                     else:
                         pred_column = "Molsub_surr_4clf"
 
-                    # Initialize data loaders with the custom data generator
+                    # Initialize data loaders
                     train_loader = MILDataGenerator_offline_graphs(dataset=train_subset,
                                                                    pred_column=pred_column,
                                                                    pred_mode=fe_taskname,
@@ -142,46 +142,57 @@ def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, b
                                                                   shuffle=False,
                                                                   batch_size=batch_size)
 
-
-                    # Choose optimizer based on the specified optimizer type
+                    # Choose optimizer
                     if optimizer_type == "adam":
                         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=owd if owd else 0)
                     elif optimizer_type == "sgd":
                         optimizer = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=owd if owd else 0)
 
-                    # Re-train the model for each fold
+                    # Early stopping variables
+                    best_loss = float('inf')
+                    patience_counter = 0
+                    best_model_state = None
+                    stopped_epoch = epochs
+
+                    # Training loop
                     for epoch in tqdm(range(epochs)):
                         model.train()
                         epoch_loss = 0
 
-                        # Training loop using custom data generator for training
                         for batch_idx, (X_batch, y_batch) in enumerate(train_loader):
-                            # Move data to GPU if available
                             device = 'cuda' if torch.cuda.is_available() else 'cpu'
                             X_batch = X_batch.to(device)
                             y_batch = torch.tensor(y_batch).to(device)
 
-                            # Reset the gradients for this batch
                             optimizer.zero_grad()
-
-                            # Forward pass through the model
                             Y_prob, Y_hat, logits, h = model(X_batch)
-
-                            # Calculate the loss using the custom loss function
                             loss = custom_categorical_cross_entropy(logits, y_batch, class_weights=class_weights)
-
-                            # Backpropagate the loss and update the model parameters
                             loss.backward()
                             optimizer.step()
 
-                            # Accumulate the loss for the current epoch
                             epoch_loss += loss.item()
 
-                        # Calculate and log average loss for the epoch
                         avg_epoch_loss = epoch_loss / len(train_loader)
                         mlflow.log_metric(f"Train_Loss_Fold_{fold + 1}", float(np.round(avg_epoch_loss, 4)), step=epoch)
 
-                    # Evaluation on the test set
+                        # Early stopping check
+                        if avg_epoch_loss < best_loss:
+                            best_loss = avg_epoch_loss
+                            patience_counter = 0
+                            best_model_state = model.state_dict().copy()
+                        else:
+                            patience_counter += 1
+
+                        if patience_counter >= patience:
+                            print(f'Early stopping triggered at epoch {epoch + 1}')
+                            stopped_epoch = epoch + 1
+                            model.load_state_dict(best_model_state)
+                            break
+
+                    # Log early stopping epoch
+                    mlflow.log_metric(f"Stopped_Epoch_Fold_{fold + 1}", stopped_epoch)
+
+                    # Evaluation
                     model.eval()
                     test_loss = 0
                     correct = 0
@@ -190,40 +201,34 @@ def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, b
                     all_y_pred = []
                     all_logits = []
 
-                    # Testing loop using custom data generator for testing
                     with torch.no_grad():
                         for X_batch, y_batch in tqdm(test_loader):
-                            # Move data to GPU if available
                             device = 'cuda' if torch.cuda.is_available() else 'cpu'
                             X_batch = X_batch.to(device)
                             y_batch = torch.tensor(y_batch).to(device)
 
-                            # Forward pass through the model
                             Y_prob, Y_hat, logits, h = model(X_batch)
-
-                            # Calculate the loss on the test set
                             loss = custom_categorical_cross_entropy(logits, y_batch, class_weights=class_weights)
                             test_loss += loss.item()
 
-                            # Calculate accuracy
                             _, predicted = torch.max(logits.data, 1)
 
-                            # Ensure y_batch has a batch dimension if it's a scalar
                             if y_batch.dim() == 0:
                                 y_batch = y_batch.unsqueeze(dim=0)
 
-                            # Now you can safely use y_batch in batch-related operations
                             total += y_batch.size(0)
                             correct += (predicted == y_batch).sum().item()
 
-                            # Collect all predictions and true labels
                             all_y_true.extend(y_batch.cpu().numpy())
                             all_y_pred.extend(predicted.cpu().numpy())
                             all_logits.extend(logits)
 
-                    # Log test set metrics
+                    # Calculate and log metrics
                     avg_test_loss = test_loss / len(test_loader)
                     accuracy = 100 * correct / total
+
+
+
                     mlflow.log_metric(f"Test_Loss_Fold_{fold + 1}", float(np.round(avg_test_loss, 4)))
                     mlflow.log_metric(f"Test_Accuracy_Fold_{fold + 1}", float(np.round(accuracy, 4)))
 
