@@ -54,7 +54,7 @@ def custom_categorical_cross_entropy(logits, y_true, class_weights=None):
     return loss.mean()
 
 
-def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=5, n_repeats=10, batch_size=128, epochs=100,
+def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, batch_size=128, epochs=100,
                    class_weights=None, output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None,
                    lr=0.0001, optimizer_type='adam', owd=None, context_aware='CA'):
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
@@ -345,8 +345,8 @@ def parse_slurm_arguments():
                         help='Directory where graphs are stored')
 
     # Training parameters
-    parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
-    parser.add_argument('--n_repeats', default=2, type=int, help='Number of Monte Carlo repeats')
+    parser.add_argument('--n_folds', default=3, type=int, help='Number of folds for Monte Carlo CV')
+    parser.add_argument('--n_repeats', default=1, type=int, help='Number of Monte Carlo repeats')
 
     # Model hyperparameters (previously in lists, now individual)
     parser.add_argument('--lr', type=float, required=True, help='Learning rate')
