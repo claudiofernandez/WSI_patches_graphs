@@ -623,8 +623,8 @@ class PatchGCN_MeanMax_LSelec(torch.nn.Module):
         # Change to test with variable num_gcn_layers
         self.path_phi = nn.Sequential(*[nn.Linear(hidden_dim * num_layers, hidden_dim * num_layers), nn.ReLU(), nn.Dropout(0.25)])
 
-        self.path_attention_head = Attn_Net_Gated(L=hidden_dim * num_layers, D=hidden_dim * num_layers, dropout=dropout, n_classes=self.n_classes)
-        self.path_rho = nn.Sequential(*[nn.Linear(hidden_dim * num_layers, hidden_dim * num_layers), nn.ReLU(), nn.Dropout(dropout)])
+        self.path_attention_head = Attn_Net_Gated(L=hidden_dim * num_layers, D=hidden_dim * num_layers, dropout=0.25, n_classes=self.n_classes)
+        self.path_rho = nn.Sequential(*[nn.Linear(hidden_dim * num_layers, hidden_dim * num_layers), nn.ReLU(), nn.Dropout(0.25)])
 
         self.classifier = torch.nn.Linear(hidden_dim * num_layers, n_classes)
 
