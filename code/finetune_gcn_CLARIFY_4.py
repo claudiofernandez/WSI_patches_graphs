@@ -273,11 +273,35 @@ def get_pred_column(fe_taskname):
     return "Molsub_surr_4clf"
 
 
+from sklearn.model_selection import StratifiedKFold
+from torch.utils.data import Subset, DataLoader
+import mlflow
+import os
+import numpy as np
+from sklearn.metrics import roc_auc_score, f1_score, accuracy_score, confusion_matrix
+from tqdm import tqdm
+import torch
+
+
+from sklearn.model_selection import StratifiedKFold
+from torch.utils.data import Subset, DataLoader
+import mlflow
+import os
+import numpy as np
+from sklearn.metrics import roc_auc_score, f1_score, accuracy_score, confusion_matrix
+from tqdm import tqdm
+import torch
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+
 def monte_carlo_cv_with_validation(
         dataset,
         model_params,
         fe_taskname,
-        n_repeats=1,
+        n_repeats=3,
+        n_folds=5,
         batch_size=1,
         epochs=100,
         output_dir='outputs',
@@ -292,7 +316,7 @@ def monte_carlo_cv_with_validation(
         virtual_batch_size=1,
         loss_function='cross_entropy',
         mlflow_log_models=True,
-        eval_interval=5  # How often to evaluate on val/test
+        eval_interval=5
 ):
     os.makedirs(output_dir, exist_ok=True)
     if mlflow_server_url:
@@ -305,229 +329,263 @@ def monte_carlo_cv_with_validation(
     for repeat in range(n_repeats):
         metrics_tracker = MetricsTracker()
 
-        # Create model
-        model = PatchGCN_MeanMax_LSelec(**model_params)
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        model = model.to(device)
-
-        # Get train/val/test splits
-        train_idx, val_idx, test_idx = stratified_kfold_train_val_test(
-            labels=labels,
-            train_size=0.7,
-            val_size=0.15,
+        # Step 1: Create dynamic train/val/test splits for each repeat
+        train_val_idx, test_idx = train_test_split(
+            np.arange(len(labels)),
             test_size=0.15,
-            random_seed=42 + repeat
+            stratify=labels,
+            random_state=42 + repeat
         )
 
-        # Create datasets and loaders
-        train_subset = Subset(dataset, train_idx)
-        val_subset = Subset(dataset, val_idx)
-        test_subset = Subset(dataset, test_idx)
-
-        train_loader = MILDataGenerator_offline_graphs_balanced(
-            dataset=train_subset,
-            batch_size=batch_size,
-            pred_column=get_pred_column(fe_taskname),
-            pred_mode=fe_taskname,
-            graphs_on_ram=True,
-            shuffle=True
+        train_idx, val_idx = train_test_split(
+            train_val_idx,
+            test_size=0.176,  # 15% / (85% total after initial split)
+            stratify=labels[train_val_idx],
+            random_state=42 + repeat
         )
 
-        val_loader = MILDataGenerator_offline_graphs(
-            dataset=val_subset,
-            batch_size=batch_size,
-            pred_column=get_pred_column(fe_taskname),
-            pred_mode=fe_taskname,
-            graphs_on_ram=True,
-            shuffle=False
-        )
+        skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42 + repeat)
 
-        test_loader = MILDataGenerator_offline_graphs(
-            dataset=test_subset,
-            batch_size=batch_size,
-            pred_column=get_pred_column(fe_taskname),
-            pred_mode=fe_taskname,
-            graphs_on_ram=True,
-            shuffle=False
-        )
+        for fold_idx, (fold_train_idx, fold_val_idx) in enumerate(
+                skf.split(np.zeros(len(train_idx)), labels[train_idx])):
+            print(f"Repeat {repeat + 1}, Fold {fold_idx + 1}")
 
-        # MLFlow run setup
-        #run_name = f"Repeat_{repeat + 1}_{fe_taskname}"
+            # Map fold indices back to full dataset indices
+            fold_train_idx = train_idx[fold_train_idx]
+            fold_val_idx = train_idx[fold_val_idx]
 
-        run_name = (
-            f"Repeat_{repeat + 1}_{fe_taskname}_"
-            f"GCN_{model_params['gnn_layer_type']}_"
-            f"Layers{model_params['num_layers']}_"
-            f"Pool_{model_params['pooling']}_"
-            f"LR_{str(lr).replace('.', '')}_"
-            f"Opt_{optimizer_type}"
-        )
+            # Create subsets and data loaders
+            train_subset = Subset(dataset, fold_train_idx)
+            val_subset = Subset(dataset, fold_val_idx)
+            test_subset = Subset(dataset, test_idx)
 
-        with mlflow.start_run(run_name=run_name):
-            # Log parameters
-            mlflow.log_params({
-                "Learning Rate": lr,
-                "Optimizer Type": optimizer_type,
-                "Weight Decay": optimizer_weight_decay,
-                "Epochs": epochs,
-                "Batch Size": batch_size,
-                "Virtual Batch Size": virtual_batch_size,
-                "Early Stopping": early_stopping,
-                "Scheduler": scheduler,
-                "Criterion": criterion,
-                "Evaluation Interval": eval_interval
-            })
+            fold_indices = {
+                "train_idx": fold_train_idx.tolist(),
+                "val_idx": fold_val_idx.tolist(),
+                "test_idx": test_idx.tolist()
+            }
+            indices_path = os.path.join(output_dir, f'indices_repeat_{repeat}_fold_{fold_idx}.json')
+            with open(indices_path, 'w') as f:
+                json.dump(fold_indices, f)
 
-            # Initialize optimizer and scheduler
-            optimizer = get_optimizer(model, optimizer_type, lr, optimizer_weight_decay)
-            if scheduler:
-                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode='max', patience=10, factor=0.5
+            train_loader = MILDataGenerator_offline_graphs_balanced(
+                dataset=train_subset,
+                batch_size=batch_size,
+                pred_column=get_pred_column(fe_taskname),
+                pred_mode=fe_taskname,
+                graphs_on_ram=True,
+                shuffle=True
+            )
+
+            val_loader = MILDataGenerator_offline_graphs(
+                dataset=val_subset,
+                batch_size=batch_size,
+                pred_column=get_pred_column(fe_taskname),
+                pred_mode=fe_taskname,
+                graphs_on_ram=True,
+                shuffle=False
+            )
+
+            test_loader = MILDataGenerator_offline_graphs(
+                dataset=test_subset,
+                batch_size=batch_size,
+                pred_column=get_pred_column(fe_taskname),
+                pred_mode=fe_taskname,
+                graphs_on_ram=True,
+                shuffle=False
+            )
+
+            # Start MLFlow run (rest of the code remains unchanged)
+            run_name = (
+                f"Repeat_{repeat + 1}_Fold_{fold_idx + 1}_{fe_taskname}_"
+                f"GCN_{model_params['gnn_layer_type']}_"
+                f"Layers{model_params['num_layers']}_"
+                f"Pool_{model_params['pooling']}_"
+                f"LR_{str(lr).replace('.', '')}_"
+                f"Opt_{optimizer_type}"
+            )
+
+            with mlflow.start_run(run_name=run_name):
+                mlflow.log_params({
+                    "Learning Rate": lr,
+                    "Optimizer Type": optimizer_type,
+                    "Weight Decay": optimizer_weight_decay,
+                    "Epochs": epochs,
+                    "Batch Size": batch_size,
+                    "Virtual Batch Size": virtual_batch_size,
+                    "Early Stopping": early_stopping,
+                    "Scheduler": scheduler,
+                    "Criterion": criterion,
+                    "Evaluation Interval": eval_interval
+                })
+
+                mlflow.log_artifact(indices_path)
+
+                # Initialize model, optimizer, and scheduler
+                model = PatchGCN_MeanMax_LSelec(**model_params).to('cuda' if torch.cuda.is_available() else 'cpu')
+                optimizer = get_optimizer(model, optimizer_type, lr, optimizer_weight_decay)
+                if scheduler:
+                    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer, mode='max', patience=10, factor=0.5
+                    )
+
+                best_val_metric = 0
+                patience_counter = 0
+                best_model_state = None
+
+                for epoch in range(epochs):
+                    # Training phase
+                    model.train()
+                    train_loss = 0
+                    train_preds = []
+                    train_labels = []
+
+                    for batch_idx, (X_batch, y_batch) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch + 1}/{epochs}')):
+                        X_batch = X_batch.to('cuda')
+                        y_batch = torch.tensor(y_batch).to('cuda')
+
+                        Y_prob, Y_hat, logits, h = model(X_batch)
+                        loss = custom_categorical_cross_entropy(logits, y_batch)
+                        loss = loss / virtual_batch_size
+                        loss.backward()
+
+                        if ((batch_idx + 1) % virtual_batch_size == 0) or (batch_idx + 1 == len(train_loader)):
+                            optimizer.step()
+                            optimizer.zero_grad()
+
+                        train_loss += loss.item() * virtual_batch_size
+                        train_preds.extend(Y_prob.detach().cpu().numpy())
+                        n_classes = Y_prob.shape[1]
+                        label_one_hot = F.one_hot(y_batch.cpu(), num_classes=n_classes).numpy()
+                        train_labels.append(label_one_hot)
+
+                    # Calculate training metrics
+                    train_metrics = {
+                        'loss': train_loss / len(train_loader),
+                        'auc': roc_auc_score(train_labels, train_preds, multi_class='ovr'),
+                        'f1': f1_score(np.argmax(train_labels, axis=1),
+                                       np.argmax(train_preds, axis=1),
+                                       average='weighted')
+                    }
+                    print(f"Epoch {epoch + 1} - Train Loss: {train_metrics['loss']:.4f}, AUC: {train_metrics['auc']:.4f}, F1: {train_metrics['f1']:.4f}")
+
+                    if epoch % eval_interval == 0:
+                        val_metrics = evaluate_metrics_on_loader(model, val_loader, 'cuda', 'Validation')
+                        test_metrics = evaluate_metrics_on_loader(model, test_loader, 'cuda', 'Test')
+
+                        print(f"Epoch {epoch + 1} - Val Loss: {val_metrics['loss']:.4f}, AUC: {val_metrics['auc']:.4f}, F1: {val_metrics['f1']:.4f}")
+                        print(f"Epoch {epoch + 1} - Test Loss: {test_metrics['loss']:.4f}, AUC: {test_metrics['auc']:.4f}, F1: {test_metrics['f1']:.4f}")
+
+                        if scheduler:
+                            current_metric = val_metrics['auc'] if criterion == 'auc' else val_metrics['f1']
+                            scheduler.step(current_metric)
+
+                        current_val_metric = val_metrics['auc'] if criterion == 'auc' else val_metrics['f1']
+                        if current_val_metric > best_val_metric:
+                            best_val_metric = current_val_metric
+                            patience_counter = 0
+                            best_model_state = model.state_dict().copy()
+                            model_path = os.path.join(output_dir, f'best_model_repeat_{repeat}_fold_{fold_idx}.pth')
+                            torch.save(best_model_state, model_path)
+                            if mlflow_log_models:
+                                mlflow.log_artifact(model_path)
+
+                            # Save and log confusion matrix
+                            val_cm = confusion_matrix(
+                                np.argmax(val_metrics['labels'], axis=1),
+                                np.argmax(val_metrics['preds'], axis=1)
+                            )
+                            cm_path = os.path.join(output_dir, f'confusion_matrix_repeat_{repeat}_fold_{fold_idx}_epoch_{epoch}.png')
+                            plot_confusion_matrix(val_cm, labels=np.unique(labels), fe_taskname=fe_taskname,
+                                                  cm_image_path=cm_path)
+
+                            mlflow.log_artifact(cm_path)
+                        else:
+                            patience_counter += 1
+
+                        mlflow.log_metrics({
+                            "train_loss": train_metrics['loss'],
+                            "train_auc": train_metrics['auc'],
+                            "train_f1": train_metrics['f1'],
+                            "val_loss": val_metrics['loss'],
+                            "val_auc": val_metrics['auc'],
+                            "val_f1": val_metrics['f1'],
+                            "test_loss": test_metrics['loss'],
+                            "test_auc": test_metrics['auc'],
+                            "test_f1": test_metrics['f1'],
+                            "best_val_metric": best_val_metric
+                        }, step=epoch)
+
+                    if early_stopping and patience_counter >= 10:
+                        print(f'Early stopping triggered at epoch {epoch}')
+                        break
+
+                if best_model_state is not None:
+                    model.load_state_dict(best_model_state)
+                final_test_metrics = evaluate_metrics_on_loader(model, test_loader, 'cuda', 'Final Test')
+
+                # Save and log test confusion matrix
+                test_cm = confusion_matrix(
+                    np.argmax(final_test_metrics['labels'], axis=1),
+                    np.argmax(final_test_metrics['preds'], axis=1)
                 )
+                test_cm_path = os.path.join(output_dir, f'test_confusion_matrix_repeat_{repeat}_fold_{fold_idx}.png')
+                plot_confusion_matrix(test_cm, labels=np.unique(labels), fe_taskname=fe_taskname,
+                                      cm_image_path=test_cm_path)
 
-            best_val_metric = 0
-            best_epoch = 0
-            patience_counter = 0
-            best_model_state = None
+                mlflow.log_artifact(test_cm_path)
 
-            # Training loop
-            for epoch in range(epochs):
-                # Training phase
-                model.train()
-                train_loss = 0
-                train_preds = []
-                train_labels = []
+                all_metrics.append({
+                    "repeat": repeat,
+                    "fold": fold_idx,
+                    "best_val_metric": best_val_metric,
+                    "final_test_metrics": final_test_metrics
+                })
 
-                for batch_idx, (X_batch, y_batch) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch + 1}/{epochs}')):
-                    X_batch = X_batch.to(device)
-                    y_batch = torch.tensor(y_batch).to(device)
+                metrics_tracker.save_metrics(output_dir, repeat)
 
-                    Y_prob, Y_hat, logits, h = model(X_batch)
-                    loss = custom_categorical_cross_entropy(
-                        logits,
-                        y_batch)
-                    #print(h)
-
-                    # Virtual batch handling
-                    loss = loss / virtual_batch_size
-                    loss.backward()
-
-                    if ((batch_idx + 1) % virtual_batch_size == 0) or (batch_idx + 1 == len(train_loader)):
-                        optimizer.step()
-                        optimizer.zero_grad()
-
-                    train_loss += loss.item() * virtual_batch_size
-                    train_preds.extend(Y_prob.detach().cpu().numpy())
-                    # Convert scalar label to one-hot for metrics calculation
-                    n_classes = Y_prob.shape[1]
-                    label_one_hot = torch.zeros(n_classes)
-                    label_one_hot[y_batch.cpu()] = 1
-                    train_labels.append(label_one_hot.numpy())
-
-                # Calculate training metrics
-                train_metrics = {
-                    'loss': train_loss / len(train_loader),
-                    'auc': roc_auc_score(train_labels, train_preds, multi_class='ovr'),
-                    'f1': f1_score(np.argmax(train_labels, axis=1),
-                                   np.argmax(train_preds, axis=1),
-                                   average='weighted')
-                }
-
-                # Evaluate on validation and test sets every eval_interval epochs
-                if epoch % eval_interval == 0:
-                    print(f"\nEvaluating at epoch {epoch}")
-
-                    # Validation phase
-                    val_metrics = evaluate_metrics_on_loader(model, val_loader, device, 'Validation')
-
-                    # Test phase
-                    test_metrics = evaluate_metrics_on_loader(model, test_loader, device, 'Test')
-
-                    # Update learning rate scheduler
-                    if scheduler:
-                        current_metric = val_metrics['auc'] if criterion == 'auc' else val_metrics['f1']
-                        scheduler.step(current_metric)
-
-                    # Model saving logic
-                    current_val_metric = val_metrics['auc'] if criterion == 'auc' else val_metrics['f1']
-                    if current_val_metric > best_val_metric:
-                        best_val_metric = current_val_metric
-                        best_epoch = epoch
-                        patience_counter = 0
-                        best_model_state = model.state_dict().copy()
-
-                        # Save best model
-                        model_path = os.path.join(output_dir, f'best_model_repeat_{repeat}.pth')
-                        torch.save(model.state_dict(), model_path)
-                        if mlflow_log_models:
-                            mlflow.log_artifact(model_path)
-
-                        # Save and log confusion matrix
-                        val_cm = confusion_matrix(
-                            np.argmax(val_metrics['labels'], axis=1),
-                            np.argmax(val_metrics['preds'], axis=1)
-                        )
-                        cm_path = os.path.join(output_dir, f'confusion_matrix_repeat_{repeat}_epoch_{epoch}.png')
-                        plot_confusion_matrix(val_cm, labels=np.unique(labels), fe_taskname=fe_taskname,
-                                              cm_image_path=cm_path)
-                        #plot_confusion_matrix(val_cm, classes=range(model_params['n_classes']),
-                        #                      output_path=cm_path)
-
-                        mlflow.log_artifact(cm_path)
-                    else:
-                        patience_counter += 1
-
-                    # Log metrics
-                    mlflow.log_metrics({
-                        "train_loss": train_metrics['loss'],
-                        "train_auc": train_metrics['auc'],
-                        "train_f1": train_metrics['f1'],
-                        "val_loss": val_metrics['loss'],
-                        "val_auc": val_metrics['auc'],
-                        "val_f1": val_metrics['f1'],
-                        "test_loss": test_metrics['loss'],
-                        "test_auc": test_metrics['auc'],
-                        "test_f1": test_metrics['f1'],
-                        "best_val_metric": best_val_metric
-                    }, step=epoch)
-
-                    # Print metrics
-                    print(f"Epoch {epoch}:")
-                    print(
-                        f"Train - Loss: {train_metrics['loss']:.4f}, AUC: {train_metrics['auc']:.4f}, F1: {train_metrics['f1']:.4f}")
-                    print(
-                        f"Val   - Loss: {val_metrics['loss']:.4f}, AUC: {val_metrics['auc']:.4f}, F1: {val_metrics['f1']:.4f}")
-                    print(
-                        f"Test  - Loss: {test_metrics['loss']:.4f}, AUC: {test_metrics['auc']:.4f}, F1: {test_metrics['f1']:.4f}")
-
-                # Early stopping check
-                if early_stopping and patience_counter >= 10:
-                    print(f'Early stopping triggered at epoch {epoch}')
-                    break
-
-                    # After training completion, evaluate best model on test set
-                    if best_model_state is not None:
-                        model.load_state_dict(best_model_state)
-                    final_test_metrics = evaluate_metrics_on_loader(model, test_loader, device, 'Final Test')
-
-                    # Log final best metrics
-                    all_metrics.append({
-                        "repeat": repeat,
-                        "best_val_metric": best_val_metric,
-                        "best_epoch": best_epoch,
-                        "final_test_metrics": final_test_metrics
-                    })
-
-                    # Save metrics for this repeat
-                    metrics_tracker.save_metrics(output_dir, repeat)
-
-                # End MLFlow run
                 mlflow.end_run()
 
-            # Save and return overall results
-            results_df = pd.DataFrame(all_metrics)
-            results_df.to_csv(os.path.join(output_dir, 'all_results.csv'))
-            return results_df
+    results_df = pd.DataFrame(all_metrics)
+
+    # Calculate overall metrics (mean and std over all folds and repeats)
+    overall_metrics = results_df['final_test_metrics'].apply(lambda x: x if isinstance(x, dict) else {})
+    summary = {
+        'mean_auc': results_df['final_test_metrics'].apply(lambda x: x['auc']).mean(),
+        'std_auc': results_df['final_test_metrics'].apply(lambda x: x['auc']).std(),
+        'mean_f1': results_df['final_test_metrics'].apply(lambda x: x['f1']).mean(),
+        'std_f1': results_df['final_test_metrics'].apply(lambda x: x['f1']).std(),
+        'mean_loss': results_df['final_test_metrics'].apply(lambda x: x['loss']).mean(),
+        'std_loss': results_df['final_test_metrics'].apply(lambda x: x['loss']).std()
+    }
+
+    # Start MLFlow run (rest of the code remains unchanged)
+    overall_run_name = (
+        f"OVERALL_{fe_taskname}_"
+        f"GCN_{model_params['gnn_layer_type']}_"
+        f"Layers{model_params['num_layers']}_"
+        f"Pool_{model_params['pooling']}_"
+        f"LR_{str(lr).replace('.', '')}_"
+        f"Opt_{optimizer_type}"
+    )
+
+    with mlflow.start_run(run_name=overall_run_name):
+
+        # Log overall metrics to MLFlow
+        mlflow.log_metrics({
+            "mean_test_auc": summary['mean_auc'],
+            "std_test_auc": summary['std_auc'],
+            "mean_test_f1": summary['mean_f1'],
+            "std_test_f1": summary['std_f1'],
+            "mean_test_loss": summary['mean_loss'],
+            "std_test_loss": summary['std_loss']
+        })
+
+        mlflow.end_run()
+
+    results_df.to_csv(os.path.join(output_dir, 'all_results.csv'))
+
+    return results_df
 
 
 import os
@@ -553,7 +611,7 @@ def parse_slurm_arguments():
 
     # Training parameters
     parser.add_argument('--n_folds', default=2, type=int, help='Number of folds for Monte Carlo CV')
-    parser.add_argument('--n_repeats', default=1, type=int, help='Number of Monte Carlo repeats')
+    parser.add_argument('--n_repeats', default=2, type=int, help='Number of Monte Carlo repeats')
     parser.add_argument('--virtual_batch_size', type=int, default=1,
                       help='Virtual batch size for gradient accumulation')
     parser.add_argument('--criterion', default='f1', type=str,
@@ -569,7 +627,7 @@ def parse_slurm_arguments():
     parser.add_argument('--lr', type=float, required=True, help='Learning rate')
     parser.add_argument('--optimizer_type', type=str, required=True, choices=['adam', 'sgd'], help='Optimizer type')
     parser.add_argument('--owd', type=float, required=True, help='Optimizer weight decay')
-    parser.add_argument('--epochs', type=int, default=25, required=False, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=3, required=False, help='Number of epochs')
     parser.add_argument('--batch_size', default=32, type=int, required=False, help='Batch size')
     parser.add_argument('--context_aware', type=str, required=True, choices=['CA', 'NCA'],
                         help='Context-aware (CA) or Non-Context-Aware (NCA)')
@@ -643,6 +701,7 @@ def main():
                 dataset=dataset,
                 model_params=model_params,
                 fe_taskname=fe_taskname,
+                n_folds=args.n_folds,
                 n_repeats=args.n_repeats,
                 batch_size=1,  # Using batch_size=1 as in original implementation
                 epochs=args.epochs,
@@ -653,7 +712,7 @@ def main():
                 optimizer_type=args.optimizer_type,
                 optimizer_weight_decay=args.owd,  # Changed from owd to optimizer_weight_decay
                 early_stopping=True,
-                scheduler=True,
+                scheduler=False,
                 criterion=args.criterion,
                 virtual_batch_size=args.virtual_batch_size,
                 loss_function=args.loss_function,
