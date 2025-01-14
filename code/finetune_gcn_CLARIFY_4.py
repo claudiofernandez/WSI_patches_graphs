@@ -640,7 +640,7 @@ def parse_slurm_arguments():
 
     # Training parameters
     parser.add_argument('--n_folds', default=3, type=int, help='Number of folds for Monte Carlo CV')
-    parser.add_argument('--n_repeats', default=3, type=int, help='Number of Monte Carlo repeats')
+    parser.add_argument('--n_repeats', default=2, type=int, help='Number of Monte Carlo repeats')
     parser.add_argument('--virtual_batch_size', type=int, default=1,
                       help='Virtual batch size for gradient accumulation')
     parser.add_argument('--criterion', default='f1', type=str,
