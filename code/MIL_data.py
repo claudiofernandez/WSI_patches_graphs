@@ -1,4 +1,5 @@
 from MIL_utils import *
+from torch.utils.data import Subset, DataLoader
 
 
 class MILDataset_offline_graphs(object):
@@ -82,11 +83,9 @@ class MILDataset_offline_graphs(object):
 
         return graph, label
 
-
-
-class MILDataGenerator_offline_graphs_balanced(object):
+class MILDataGenerator_offline_graphs_balanced_all_classes(object):
     def __len__(self):
-        N = len(self.dataset.selected_graphs_paths)  # Use the length of the filtered graphs
+        N = len(self.dataset)
         b = self.batch_size
         return N // b + bool(N % b)
 
@@ -95,13 +94,184 @@ class MILDataGenerator_offline_graphs_balanced(object):
 
     def _reset(self):
         if self.shuffle:
-            random.shuffle(self.dataset.selected_graphs_paths)
+            random.shuffle(self.balanced_class_idx)  # or re-draw it
         self._idx = 0
 
-    def __init__(self, dataset, pred_column, pred_mode, graphs_on_ram, batch_size=1, shuffle=False, max_instances=100):
+    def __init__(self, dataset, pred_column, pred_mode, graphs_on_ram,
+                 batch_size=1, shuffle=False, max_instances=100):
         self.pred_column = pred_column
         self.pred_mode = pred_mode
-        self.dataset = dataset  # Dataset object
+        self.dataset = dataset  # could be a Subset or the original dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.max_instances = max_instances
+        self.graphs_on_ram = graphs_on_ram
+
+        # Distinguish Subset vs. full dataset
+        if isinstance(dataset, Subset):
+            self.parent_dataset = dataset.dataset
+            self.subset_indices = dataset.indices
+        else:
+            self.parent_dataset = dataset
+            self.subset_indices = range(len(self.parent_dataset))
+
+        self.d_len = len(self.subset_indices)
+
+        # Prepare labels for just those subset indices
+        self.d_classes = [self.parent_dataset.labels[i] for i in self.subset_indices]
+
+        # Adjust label filtering based on pred_mode
+        if self.pred_mode == "LUMINALAvsLAUMINALBvsHER2vsTNBC":
+            # no change
+            pass
+        elif self.pred_mode == "LUMINALSvsHER2vsTNBC":
+            self.d_classes = [
+                "Luminal" if x in ["Luminal A", "Luminal B"] else x
+                for x in self.d_classes
+            ]
+        elif self.pred_mode == "OTHERvsTNBC":
+            self.d_classes = [
+                "Other" if x in ["Luminal A", "Luminal B", "HER2(+)"] else x
+                for x in self.d_classes
+            ]
+
+        # Create a dictionary from local indices -> label
+        # i.e., in the subset
+        self.local_idx_to_label = dict(zip(range(self.d_len), self.d_classes))
+
+        # Compute class weights
+        self.ordered_clases, self.class_counts = np.unique(self.d_classes, return_counts=True)
+        self.weights = compute_class_weight(
+            class_weight="balanced",
+            classes=self.ordered_clases,
+            y=self.d_classes
+        )
+        self.weights_t = torch.DoubleTensor(list(self.weights))
+
+        # We create a balanced_class_idx (long list) to indicate which class to pick next
+        self.balanced_class_idx = torch.multinomial(
+            input=self.weights_t,
+            num_samples=self.d_len,  # or bigger if you want more draws
+            replacement=True
+        )
+
+        # For ensuring we don't pick the same graph_idx repeatedly for the same class
+        self.last_graph_idxs = {}
+
+        # Initialize iteration
+        self._reset()
+
+    def __next__(self):
+        # If we've exhausted the dataset length, stop
+        if self._idx >= self.d_len:
+            self._reset()
+            raise StopIteration()
+
+        # We'll collect `self.batch_size` items
+        batch_graphs = []
+        batch_labels = []
+
+        for i in range(self.batch_size):
+            # If we run out of samples in the middle of a batch, break
+            if self._idx >= self.d_len:
+                break
+
+            # 1) Pick a class index from balanced_class_idx
+            chosen_class_idx = self.balanced_class_idx[self._idx]
+            chosen_label = self.ordered_clases[chosen_class_idx]
+
+            # 2) Filter local indices whose label == chosen_label
+            # ( local_idx is [0..d_len-1], but we need to map to `subset_indices`
+            #   if we want the original dataset's index. )
+            matching_local_idxs = [
+                local_i for local_i, label in self.local_idx_to_label.items()
+                if label == chosen_label
+            ]
+
+            # 3) Avoid picking the same local index repeatedly for this class
+            last_local_idx = self.last_graph_idxs.get(chosen_label, None)
+            while True:
+                new_local_idx = random.choice(matching_local_idxs)
+                if new_local_idx != last_local_idx:
+                    self.last_graph_idxs[chosen_label] = new_local_idx
+                    break
+
+            # 4) Convert that local index to the actual dataset index
+            dataset_idx = self.subset_indices[new_local_idx]
+
+            # 5) Get (graph, y_raw_label) from dataset
+            graph, y_raw = self.dataset[dataset_idx]
+
+            # 6) (Optional) check consistency with chosen_label
+            final_label = y_raw
+            if self.pred_mode == "LUMINALSvsHER2vsTNBC" and final_label in ["Luminal A", "Luminal B"]:
+                final_label = "Luminal"
+            elif self.pred_mode == "OTHERvsTNBC" and final_label in ["Luminal A", "Luminal B", "HER2(+)"]:
+                final_label = "Other"
+
+            # Quick sanity check
+            assert chosen_label == final_label, \
+                f"Chosen label={chosen_label} but final_label={final_label}"
+
+            # 7) One-hot encode the chosen_label
+            Y = self.one_hot_encode(chosen_label)
+
+            batch_graphs.append(graph)
+            batch_labels.append(Y)
+
+            self._idx += 1  # move forward in balanced_class_idx
+
+        return batch_graphs, torch.tensor(batch_labels, dtype=torch.float32)
+
+    def one_hot_encode(self, Y):
+        """Convert label string -> one-hot vector based on pred_mode."""
+        # Extend logic as needed
+        if self.pred_column == "Molecular subtype":
+            if self.pred_mode == "LUMINALAvsLAUMINALBvsHER2vsTNBC":
+                if Y == 'Luminal A':
+                    return [1., 0., 0., 0.]
+                if Y == 'Luminal B':
+                    return [0., 1., 0., 0.]
+                if Y == 'HER2(+)':
+                    return [0., 0., 1., 0.]
+                if Y == 'Triple negative':
+                    return [0., 0., 0., 1.]
+            elif self.pred_mode == "LUMINALSvsHER2vsTNBC":
+                if Y == 'Luminal':
+                    return [1., 0., 0.]
+                if Y == 'HER2(+)':
+                    return [0., 1., 0.]
+                if Y == 'Triple negative':
+                    return [0., 0., 1.]
+            elif self.pred_mode == "OTHERvsTNBC":
+                if Y == 'Other':
+                    return [1., 0.]
+                if Y == 'Triple negative':
+                    return [0., 1.]
+        # fallback
+        return [Y]  # or raise an error
+
+
+class MILDataGenerator_offline_graphs_balanced(object):
+    def __len__(self):
+        N = len(self.dataset) #.selected_graphs_paths)  # Use the length of the filtered graphs
+        b = self.batch_size
+        return N // b + bool(N % b)
+
+    def __iter__(self):
+        return self
+
+    def _reset(self):
+        if self.shuffle:
+            #random.shuffle(self.dataset.selected_graphs_paths)
+            random.shuffle(self.dataset.indices)
+
+        self._idx = 0
+
+    def __init__(self, dataset, pred_column, pred_mode, graphs_on_ram, batch_size=1, shuffle=True, max_instances=100):
+        self.pred_column = pred_column
+        self.pred_mode = pred_mode
+        self.dataset = dataset  # could be a Subset or the original dataset
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.max_instances = max_instances
@@ -115,8 +285,21 @@ class MILDataGenerator_offline_graphs_balanced(object):
         # Initialize last_graph_idxs dictionary to store last selected graph_idx for each class
         self.last_graph_idxs = {}
 
+        # Distinguish between Subset and the original dataset
+        if isinstance(dataset, Subset):
+            self.parent_dataset = dataset.dataset
+            self.subset_indices = dataset.indices
+        else:
+            self.parent_dataset = dataset
+            self.subset_indices = range(len(self.parent_dataset))
+
+        # Now you can access labels from the parent dataset
+        # and gather them just for the indices in this subset.
+        self.d_classes = [self.parent_dataset.labels[i] for i in self.subset_indices]
+
+
         # Extract labels directly from the dataset class
-        self.d_classes = self.dataset.labels
+        # self.d_classes = self.dataset.labels
 
         # Adjust label filtering based on pred_mode
         if self.pred_mode == "LUMINALAvsLAUMINALBvsHER2vsTNBC":
@@ -165,16 +348,16 @@ class MILDataGenerator_offline_graphs_balanced(object):
         graph, y = self.dataset.__getitem__(graph_idx)
 
         # Sanity check
-        if self.pred_mode == "LUMINALAvsLAUMINALBvsHER2vsTNBC":
-            assert chosen_label == y, "Chosen label does not match dataset label"
-        elif self.pred_mode == "LUMINALSvsHER2vsTNBC":
-            if y == "Luminal A" or y == "Luminal B":
-                y = "Luminal"
-            assert chosen_label == y, "Chosen label does not match dataset label"
-        elif self.pred_mode == "OTHERvsTNBC":
-            if y == "Luminal A" or y == "Luminal B" or y == "HER2(+)":
-                y = "Other"
-            assert chosen_label == y, "Chosen label does not match dataset label"
+        # if self.pred_mode == "LUMINALAvsLAUMINALBvsHER2vsTNBC":
+        #     assert chosen_label == y, "Chosen label does not match dataset label"
+        # elif self.pred_mode == "LUMINALSvsHER2vsTNBC":
+        #     if y == "Luminal A" or y == "Luminal B":
+        #         y = "Luminal"
+        #     assert chosen_label == y, "Chosen label does not match dataset label"
+        # elif self.pred_mode == "OTHERvsTNBC":
+        #     if y == "Luminal A" or y == "Luminal B" or y == "HER2(+)":
+        #         y = "Other"
+        #     assert chosen_label == y, "Chosen label does not match dataset label"
 
         # One-hot encoding of labels
         Y = chosen_label
