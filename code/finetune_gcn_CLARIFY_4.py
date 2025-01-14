@@ -316,7 +316,8 @@ def monte_carlo_cv_with_validation(
         virtual_batch_size=1,
         loss_function='cross_entropy',
         mlflow_log_models=True,
-        eval_interval=5
+        eval_interval=15,
+        class_weights_bool=None
 ):
     os.makedirs(output_dir, exist_ok=True)
     if mlflow_server_url:
@@ -395,6 +396,19 @@ def monte_carlo_cv_with_validation(
                 shuffle=False
             )
 
+            # If Class Weights, compute them
+
+            if class_weights_bool:
+                # Assuming `labels` is a NumPy array or list of your dataset labels
+                unique_classes = np.unique(labels)
+                class_weights = compute_class_weight(class_weight='balanced', classes=unique_classes, y=labels)
+
+                # Convert class_weights to a PyTorch tensor
+                class_weights = torch.tensor(class_weights, dtype=torch.float32).to('cuda')
+            else:
+                class_weights = None
+
+
             # Start MLFlow run (rest of the code remains unchanged)
             run_name = (
                 f"Repeat_{repeat + 1}_Fold_{fold_idx + 1}_{fe_taskname}_"
@@ -416,7 +430,8 @@ def monte_carlo_cv_with_validation(
                     "Early Stopping": early_stopping,
                     "Scheduler": scheduler,
                     "Criterion": criterion,
-                    "Evaluation Interval": eval_interval
+                    "Evaluation Interval": eval_interval,
+                    "Class Weights": class_weights
                 })
 
                 mlflow.log_artifact(indices_path)
@@ -445,7 +460,7 @@ def monte_carlo_cv_with_validation(
                         y_batch = torch.tensor(y_batch).to('cuda')
 
                         Y_prob, Y_hat, logits, h = model(X_batch)
-                        loss = custom_categorical_cross_entropy(logits, y_batch)
+                        loss = custom_categorical_cross_entropy(logits, y_batch, class_weights=class_weights)
                         loss = loss / virtual_batch_size
                         loss.backward()
 
@@ -516,7 +531,7 @@ def monte_carlo_cv_with_validation(
                             "best_val_metric": best_val_metric
                         }, step=epoch)
 
-                    if early_stopping and patience_counter >= 10:
+                    if early_stopping and patience_counter >= 20:
                         print(f'Early stopping triggered at epoch {epoch}')
                         break
 
@@ -571,6 +586,20 @@ def monte_carlo_cv_with_validation(
 
     with mlflow.start_run(run_name=overall_run_name):
 
+        mlflow.log_params({
+            "Learning Rate": lr,
+            "Optimizer Type": optimizer_type,
+            "Weight Decay": optimizer_weight_decay,
+            "Epochs": epochs,
+            "Batch Size": batch_size,
+            "Virtual Batch Size": virtual_batch_size,
+            "Early Stopping": early_stopping,
+            "Scheduler": scheduler,
+            "Criterion": criterion,
+            "Evaluation Interval": eval_interval,
+            "Class Weights": class_weights
+        })
+
         # Log overall metrics to MLFlow
         mlflow.log_metrics({
             "mean_test_auc": summary['mean_auc'],
@@ -610,8 +639,8 @@ def parse_slurm_arguments():
                         help='Directory where graphs are stored')
 
     # Training parameters
-    parser.add_argument('--n_folds', default=2, type=int, help='Number of folds for Monte Carlo CV')
-    parser.add_argument('--n_repeats', default=2, type=int, help='Number of Monte Carlo repeats')
+    parser.add_argument('--n_folds', default=3, type=int, help='Number of folds for Monte Carlo CV')
+    parser.add_argument('--n_repeats', default=3, type=int, help='Number of Monte Carlo repeats')
     parser.add_argument('--virtual_batch_size', type=int, default=1,
                       help='Virtual batch size for gradient accumulation')
     parser.add_argument('--criterion', default='f1', type=str,
@@ -621,13 +650,16 @@ def parse_slurm_arguments():
     parser.add_argument('--mlflow_log_models', default=True,
                       type=lambda x: (str(x).lower() == 'true'),
                       help='Whether to log models to MLFlow')
+    parser.add_argument('--class_weights', default=False,
+                      type=lambda x: (str(x).lower() == 'true'),
+                      help='Compute class weights for imbalanced training.')
 
 
     # Model hyperparameters (previously in lists, now individual)
     parser.add_argument('--lr', type=float, required=True, help='Learning rate')
     parser.add_argument('--optimizer_type', type=str, required=True, choices=['adam', 'sgd'], help='Optimizer type')
     parser.add_argument('--owd', type=float, required=True, help='Optimizer weight decay')
-    parser.add_argument('--epochs', type=int, default=3, required=False, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=50, required=False, help='Number of epochs')
     parser.add_argument('--batch_size', default=32, type=int, required=False, help='Batch size')
     parser.add_argument('--context_aware', type=str, required=True, choices=['CA', 'NCA'],
                         help='Context-aware (CA) or Non-Context-Aware (NCA)')
@@ -716,7 +748,8 @@ def main():
                 criterion=args.criterion,
                 virtual_batch_size=args.virtual_batch_size,
                 loss_function=args.loss_function,
-                mlflow_log_models=args.mlflow_log_models
+                mlflow_log_models=args.mlflow_log_models,
+                class_weights_bool=args.class_weights
             )
 
             # Save metrics with comprehensive filename
