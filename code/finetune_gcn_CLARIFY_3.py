@@ -18,6 +18,55 @@ from torch.utils.data import Subset, DataLoader
 from MIL_models import PatchGCN_MeanMax_LSelec
 
 
+def stratified_kfold_all_classes(labels, n_splits=3, shuffle=True, max_tries=1000, random_seed=42):
+    """
+    Attempts to create StratifiedKFold splits such that each fold has *all* classes
+    in both train and test splits. Returns a list of (train_index, test_index) if successful.
+
+    :param labels: numpy array of shape [N], with integer class labels.
+    :param n_splits: number of folds.
+    :param shuffle: whether to shuffle before splitting.
+    :param max_tries: how many times to try different random seeds before giving up.
+    :param random_seed: base random seed to use for reproducibility.
+    :return: A list of (train_index, test_index) pairs.
+    :raises ValueError: if we cannot find a split with all classes in each fold within max_tries attempts.
+    """
+    labels = np.array(labels)
+    unique_classes = np.unique(labels)
+    n_classes = len(unique_classes)
+
+    # A small helper to check if a given set of indices includes all classes
+    def has_all_classes(indices):
+        return len(np.unique(labels[indices])) == n_classes
+
+    # Try multiple seeds until we find a valid split
+    for attempt in range(max_tries):
+        # Use a varying random seed so that we get different shuffles each attempt
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_seed + attempt)
+
+        folds = list(skf.split(X=np.zeros(len(labels)), y=labels))
+        # Check each fold's train and test to ensure all classes appear
+        valid = True
+        for (train_index, test_index) in folds:
+            # Option A: require each fold's *test set* has all classes
+            # Option B: also require each fold's *train set* has all classes
+            if not has_all_classes(test_index):
+                valid = False
+                break
+            # If you also need the training set to contain all classes, uncomment:
+            # if not has_all_classes(train_index):
+            #     valid = False
+            #     break
+
+        if valid:
+            print(f"Found a valid split on attempt {attempt + 1}")
+            return folds
+
+    # If we get here, we couldn't find a valid split
+    raise ValueError(f"Could not find a split where every fold contains all classes, "
+                     f"even after {max_tries} attempts.")
+
+
 def plot_confusion_matrix(cm, labels, fe_taskname, cm_image_path):
     if fe_taskname == "LUMINALAvsLUMINALBvsHER2vsTNBC":
         class2idx = {0: 'Luminal A', 1: 'Luminal B', 2: 'Her2(+)', 3: 'TNBC'}
@@ -48,7 +97,7 @@ def custom_categorical_cross_entropy(logits, y_true, class_weights=None):
     Computes the categorical cross-entropy loss between the predicted and true class labels.
     """
     loss = torch.nn.CrossEntropyLoss()(logits, y_true.unsqueeze(dim=0))
-    if class_weights is not None:
+    if class_weights is not None: # Not used when already balancing from the data generator
         weight_actual_class = class_weights[y_true]
         loss = loss * weight_actual_class
     return loss.mean()
@@ -57,7 +106,17 @@ def custom_categorical_cross_entropy(logits, y_true, class_weights=None):
 def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, batch_size=128, epochs=100,
                    class_weights=None, output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None,
                    lr=0.0001, optimizer_type='adam', owd=None, context_aware='CA', patience=30):
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    #skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    labels = np.array(dataset.labels)
+
+    folds = stratified_kfold_all_classes(
+        labels,
+        n_splits=n_folds,
+        shuffle=True,
+        max_tries=1000,
+        random_seed=42
+    )
+
     all_metrics = []
 
     # Set up MLFlow server location, otherwise location of ./mlruns
@@ -102,7 +161,8 @@ def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, b
                 fold_metrics = []
                 cumulative_cm = None
 
-                for fold, (train_index, test_index) in enumerate(skf.split(np.zeros(len(labels)), labels)):
+                #for fold, (train_index, test_index) in enumerate(skf.split(np.zeros(len(labels)), labels)):
+                for fold, (train_index, test_index) in enumerate(folds):
                     print(f"Fold {fold + 1}/{n_folds}")
 
                     # Log indices
@@ -128,11 +188,17 @@ def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, b
                         pred_column = "Molsub_surr_4clf"
 
                     # Initialize data loaders
-                    train_loader = MILDataGenerator_offline_graphs(dataset=train_subset,
+                    # train_loader = MILDataGenerator_offline_graphs(dataset=train_subset,
+                    #                                                pred_column=pred_column,
+                    #                                                pred_mode=fe_taskname,
+                    #                                                graphs_on_ram=True,
+                    #                                                shuffle=True,
+                    #                                                batch_size=batch_size)
+
+                    train_loader = MILDataGenerator_offline_graphs_balanced(dataset=train_subset,
                                                                    pred_column=pred_column,
                                                                    pred_mode=fe_taskname,
                                                                    graphs_on_ram=True,
-                                                                   shuffle=True,
                                                                    batch_size=batch_size)
 
                     test_loader = MILDataGenerator_offline_graphs(dataset=test_subset,
@@ -232,10 +298,18 @@ def monte_carlo_cv(dataset, model_params, fe_taskname, n_folds=3, n_repeats=1, b
                     mlflow.log_metric(f"Test_Loss_Fold_{fold + 1}", float(np.round(avg_test_loss, 4)))
                     mlflow.log_metric(f"Test_Accuracy_Fold_{fold + 1}", float(np.round(accuracy, 4)))
 
+                    ###
+                    if fe_taskname == "LUMINALAvsLUMINALBvsHER2vsTNBC":
+                        cm_labels = [0,1,2,3]
+                    elif fe_taskname == "LUMINALSvsHER2vsTNBC":
+                        cm_labels = [0, 1, 2]
+                    elif fe_taskname == "OTHERvsTNBC":
+                        cm_labels = [0, 1]
+
                     # Calculate additional metrics
                     y_true_labels = np.array(all_y_true)
                     y_pred_labels = np.array(all_y_pred)
-                    cm = confusion_matrix(y_true_labels, y_pred_labels)
+                    cm = confusion_matrix(y_true_labels, y_pred_labels, labels=cm_labels )
                     acc = accuracy_score(y_true_labels, y_pred_labels)
                     f1 = f1_score(y_true_labels, y_pred_labels, average='weighted')
                     precision = precision_score(y_true_labels, y_pred_labels, average='weighted')
@@ -338,7 +412,7 @@ def parse_slurm_arguments():
     parser = argparse.ArgumentParser()
 
     # MLflow parameters
-    parser.add_argument("--mlflow_experiment_name", default="[30112024] Fine-tune GCN on CLARIFY Graphs", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[11012025] Fine-tune GCN on CLARIFY Graphs", type=str,
                         help='Name for experiment in MLFlow')
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
@@ -350,15 +424,15 @@ def parse_slurm_arguments():
                         help='Directory where graphs are stored')
 
     # Training parameters
-    parser.add_argument('--n_folds', default=3, type=int, help='Number of folds for Monte Carlo CV')
+    parser.add_argument('--n_folds', default=2, type=int, help='Number of folds for Monte Carlo CV')
     parser.add_argument('--n_repeats', default=1, type=int, help='Number of Monte Carlo repeats')
 
     # Model hyperparameters (previously in lists, now individual)
     parser.add_argument('--lr', type=float, required=True, help='Learning rate')
     parser.add_argument('--optimizer_type', type=str, required=True, choices=['adam', 'sgd'], help='Optimizer type')
     parser.add_argument('--owd', type=float, required=True, help='Optimizer weight decay')
-    parser.add_argument('--epochs', type=int, required=True, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, required=True, help='Batch size')
+    parser.add_argument('--epochs', type=int, default=1000, required=False, help='Number of epochs')
+    parser.add_argument('--batch_size', default=32, type=int, required=False, help='Batch size')
     parser.add_argument('--context_aware', type=str, required=True, choices=['CA', 'NCA'],
                         help='Context-aware (CA) or Non-Context-Aware (NCA)')
     parser.add_argument('--gcn_layer_type', type=str, required=True,
