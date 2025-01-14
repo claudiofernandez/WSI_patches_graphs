@@ -627,7 +627,7 @@ def parse_slurm_arguments():
     parser = argparse.ArgumentParser()
 
     # MLflow parameters
-    parser.add_argument("--mlflow_experiment_name", default="[11012025] Fine-tune GCN on CLARIFY Graphs", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[15012025] Fine-tune GCN on CLARIFY Graphs", type=str,
                         help='Name for experiment in MLFlow')
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
