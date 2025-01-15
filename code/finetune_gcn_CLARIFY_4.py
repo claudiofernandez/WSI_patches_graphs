@@ -316,7 +316,7 @@ def monte_carlo_cv_with_validation(
         virtual_batch_size=1,
         loss_function='cross_entropy',
         mlflow_log_models=True,
-        eval_interval=15,
+        eval_interval=10,
         class_weights_bool=None
 ):
     os.makedirs(output_dir, exist_ok=True)
