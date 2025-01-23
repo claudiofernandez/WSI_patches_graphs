@@ -627,7 +627,7 @@ def parse_slurm_arguments():
     parser = argparse.ArgumentParser()
 
     # MLflow parameters
-    parser.add_argument("--mlflow_experiment_name", default="[15012025] Fine-tune GCN on CLARIFY Graphs", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[23012025] Fine-tune GCN on new CLARIFY Graphs MIL FE", type=str,
                         help='Name for experiment in MLFlow')
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
@@ -635,7 +635,7 @@ def parse_slurm_arguments():
     parser.add_argument('--output_dir', type=str, default="./results", help='Path to save results')
     parser.add_argument('--gt_path', default="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx", type=str,
                         help='Path to ground truth file')
-    parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_november_23", type=str,
+    parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_january_25", type=str, # ../data/CLARIFY/results_graphs_november_23
                         help='Directory where graphs are stored')
 
     # Training parameters
