@@ -6,6 +6,7 @@ from scipy.spatial.distance import pdist, squareform
 from sklearn.metrics.pairwise import cosine_similarity
 
 
+
 def load_graph(graph_path):
     """Load a graph from a .pt file."""
     graph = torch.load(graph_path)
@@ -127,6 +128,6 @@ def compare_graphs(graph_path_bcn, graph_path_clarify):
 
 # Example usage
 if __name__ == "__main__":
-    bcn_graph_path = "../data/BCNB/results_graphs_november_23/graphs_PM_LUMINALAvsLUMINALBvsHER2vsTNBC_BB_vgg16_AGGR_attention_LR_0.002_MAGN_10x/graphs_k_8/1_graph.pt"
-    clarify_graph_path = "../data/CLARIFY/results_graphs_november_23/graphs_PM_LUMINALAvsLUMINALBvsHER2vsTNBC_BB_vgg16_AGGR_attention_LR_0.002_OP/graphs_k_8/SUS001-2021-09-24_13.39.24_graph.pt"
+    bcn_graph_path = "../data/BCNB/results_graphs_november_23/graphs_PM_LUMINALAvsLUMINALBvsHER2vsTNBC_BB_vgg16_AGGR_attention_LR_0.002_MAGN_10x/graphs_k_8/4_graph.pt" #1_graph.pt
+    clarify_graph_path = "../data/CLARIFY/results_graphs_november_23/graphs_PM_LUMINALAvsLUMINALBvsHER2vsTNBC_BB_vgg16_AGGR_attention_LR_0.002_OP/graphs_k_8/SUS004-2022-06-1316.27.47_graph.pt" #SUS001-2021-09-24_13.39.24_graph.pt
     compare_graphs(bcn_graph_path, clarify_graph_path)
