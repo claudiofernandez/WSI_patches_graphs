@@ -518,7 +518,7 @@ def monte_carlo_cv_with_validation(
                             current_metric = val_metrics['auc'] if criterion == 'auc' else val_metrics['f1']
                             scheduler.step(current_metric)
 
-                        current_val_metric = val_metrics['auc'] if criterion == 'auc' else val_metLaterics['f1']
+                        current_val_metric = val_metrics['auc'] if criterion == 'auc' else val_metrics['f1']
                         if current_val_metric > best_val_metric:
                             best_val_metric = current_val_metric
                             patience_counter = 0
@@ -664,7 +664,7 @@ def parse_slurm_arguments():
     # Training parameters
     parser.add_argument('--n_folds', default=3, type=int, help='Number of folds for Monte Carlo CV')
     parser.add_argument('--n_repeats', default=2, type=int, help='Number of Monte Carlo repeats')
-    parser.add_argument('--virtual_batch_size', type=int, default=16,
+    parser.add_argument('--virtual_batch_size', type=int, default=32,
                       help='Virtual batch size for gradient accumulation')
     parser.add_argument('--criterion', default='f1', type=str,
                       help='Criterion for model selection (auc or f1)')
