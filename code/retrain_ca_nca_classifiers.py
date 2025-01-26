@@ -248,7 +248,7 @@ def main(args):
 
 
     tasks_labels_mappings = {
-        #"LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "TNBC": 3},
+        "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "TNBC": 3},
         "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "TNBC": 2},
         "OTHERvsTNBC": {"Other": 0, "TNBC": 1}
     }
@@ -382,7 +382,7 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', default=200, type=int, help='Number of epochs for training')
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size for training')
     parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
-    parser.add_argument('--n_repeats', default=10, type=int, help='Number of Monte Carlo repeats')
+    parser.add_argument('--n_repeats', default=3, type=int, help='Number of Monte Carlo repeats')
     parser.add_argument('--gt_path', default="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx", type=str, help='Path to ground truth file')
     parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_january_25", type=str, help='Directory where graphs are stored')
     parser.add_argument('--knn', default=19, type=int, help='KNN used to store graphs')
@@ -398,8 +398,8 @@ if __name__ == "__main__":
     lrs = [0.01, 0.001, 0.0001, 0.00001, 0.000001] #
     optimizers = ["adam"] #"sgd"
     owds = [0.01, 0.001, 0.0001, 0.00001, 0.000001]
-    epochs = [200, 500]
-    batch_sizes = [64, 128, 256]
+    epochs = [150]
+    batch_sizes = [128, 256]
     context_awareness = ["NCA"]
 
 
