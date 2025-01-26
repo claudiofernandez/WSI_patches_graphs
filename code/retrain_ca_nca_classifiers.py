@@ -13,6 +13,8 @@ from sklearn.utils.class_weight import compute_class_weight
 import re
 from collections import Counter
 import itertools
+from copy import deepcopy
+from sklearn.utils import shuffle
 
 
 def plot_confusion_matrix(cm, labels, fe_taskname, cm_image_path):
@@ -56,7 +58,7 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                    output_dir='outputs', mlflow_experiment_name="Default", mlflow_server_url=None, lr=0.0001,
                    optimizer_type='adam', owd=None, context_aware='NCA'):
 
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True)
     all_metrics = []
 
     # Set up MLFlow server location, Otherwise location of ./mlruns
@@ -68,6 +70,9 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
     with open(indices_save_path, 'w') as index_file:
 
         for repeat in range(n_repeats):
+            # Reshuffle data with a new seed for this repeat
+            X_shuffled, y_shuffled = shuffle(X, y, random_state=repeat)
+
             # Start a nested MLFlow run for each repeat
             with mlflow.start_run(run_name=f"Repeat_{repeat + 1}_{context_aware}_{fe_taskname}_{optimizer_type}_{str(lr)}_{str(owd)}", nested=True):
                 # Log parameters once for the run
@@ -85,6 +90,8 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                 cumulative_cm = None  # To store the accumulated confusion matrix
 
                 for fold, (train_index, test_index) in enumerate(skf.split(X, y)):
+
+
                     print(f"Fold {fold + 1}/{n_folds}")
 
                     # Log the indices of the training and test set for reproducibility
@@ -97,31 +104,40 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                     mlflow.log_text(str(test_index.tolist()), f"Repeat_{repeat + 1}_Fold_{fold + 1}_test_indices.txt")
 
                     # Split the dataset into training and testing for this fold
-                    X_train, X_test = X[train_index], X[test_index]
-                    y_train, y_test = y[train_index], y[test_index]
+                    X_train, X_test = X_shuffled[train_index], X_shuffled[test_index]
+                    y_train, y_test = y_shuffled[train_index], y_shuffled[test_index]
 
                     # Convert to PyTorch tensors
                     X_train, y_train = torch.tensor(X_train, dtype=torch.float32).to('cuda'), torch.tensor(y_train).to('cuda')
                     X_test, y_test = torch.tensor(X_test, dtype=torch.float32).to('cuda'), torch.tensor(y_test).to('cuda')
 
-                    classifier = classifier.to('cuda')
+                    # Compute class weights
+                    classes = np.unique(y_train.cpu().numpy())
+                    weights = compute_class_weight('balanced', classes=classes, y=y_train.cpu().numpy())
+                    fold_class_weights = torch.tensor(weights, dtype=torch.float32).to('cuda')
+
+
+                    # Reinitialize the classifier for this fold
+                    current_classifier = deepcopy(classifier).to('cuda')
+                    current_classifier.train()
 
                     if optimizer_type == "adam":
-                        optimizer = torch.optim.Adam(classifier.parameters(), lr=lr, weight_decay=owd)
+                        optimizer = torch.optim.Adam(current_classifier.parameters(), lr=lr, weight_decay=owd)
                     elif optimizer_type == "sgd":
-                        optimizer = torch.optim.SGD(classifier.parameters, lr=lr, weight_decay=owd)
+                        optimizer = torch.optim.SGD(current_classifier.parameters(), lr=lr, weight_decay=owd)
+
 
                     # Re-train the classifier for each fold
                     for epoch in range(epochs):
-                        classifier.train()
+                        current_classifier.train()
                         epoch_loss = 0
                         for i in range(0, len(X_train), batch_size):
                             X_batch = X_train[i:i + batch_size]
                             y_batch = y_train[i:i + batch_size]
 
                             optimizer.zero_grad()
-                            logits = classifier(X_batch)
-                            loss = custom_categorical_cross_entropy(logits, y_batch, class_weights=class_weights)
+                            logits = current_classifier(X_batch)
+                            loss = custom_categorical_cross_entropy(logits, y_batch, class_weights=fold_class_weights)
                             loss.backward()
                             optimizer.step()
 
@@ -132,14 +148,15 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
                         mlflow.log_metric("Train_Loss_"+str(fold), float(np.round(avg_epoch_loss, 4)), step=epoch)
 
                     # Evaluate on the test set
-                    classifier.eval()
+                    current_classifier.eval()
                     with torch.no_grad():
-                        test_logits = classifier(X_test)
+                        test_logits = current_classifier(X_test)
                         y_pred = torch.argmax(test_logits, dim=1).cpu().numpy()
                         y_true = y_test.cpu().numpy()
 
                         # Calculate metrics and confusion matrix
-                        cm = confusion_matrix(y_true, y_pred, labels=np.unique(y))
+                        classes = np.unique(y_shuffled)
+                        cm = confusion_matrix(y_true, y_pred, labels=np.unique(y_shuffled))
                         acc = accuracy_score(y_true, y_pred)
                         f1 = f1_score(y_true, y_pred, average='weighted')
                         precision = precision_score(y_true, y_pred, average='weighted')
@@ -188,7 +205,7 @@ def monte_carlo_cv(X, y, classifier, fe_taskname, n_folds=5, n_repeats=10, batch
 
                 # Save cumulative confusion matrix after each repeat
                 cm_image_path = os.path.join(output_dir, f"cumulative_confusion_matrix_repeat_{repeat+1}.png")
-                plot_confusion_matrix(cumulative_cm, labels=np.unique(y), fe_taskname=fe_taskname, cm_image_path=cm_image_path)
+                plot_confusion_matrix(cumulative_cm, labels=np.unique(y_shuffled), fe_taskname=fe_taskname, cm_image_path=cm_image_path)
                 mlflow.log_artifact(cm_image_path, f"confusion_matrices/repeat_{repeat+1}")
 
                 # End MLFlow run after each repeat
@@ -231,7 +248,7 @@ def main(args):
 
 
     tasks_labels_mappings = {
-        "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "TNBC": 3},
+        #"LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "TNBC": 3},
         "LUMINALSvsHER2vsTNBC": {"Luminal": 0, "HER2(+)": 1, "TNBC": 2},
         "OTHERvsTNBC": {"Other": 0, "TNBC": 1}
     }
@@ -355,7 +372,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # MLFlow configuration
-    parser.add_argument("--mlflow_experiment_name", default="[07092024] HPSearch Classifiers", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[26012025] HPSearch Classifiers new GRAPHS", type=str,
                         help='Name for experiment in MLFlow') #[Final] Classifier on Final CBDC 06_09_2024
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
@@ -367,7 +384,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_folds', default=5, type=int, help='Number of folds for Monte Carlo CV')
     parser.add_argument('--n_repeats', default=10, type=int, help='Number of Monte Carlo repeats')
     parser.add_argument('--gt_path', default="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx", type=str, help='Path to ground truth file')
-    parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_november_23", type=str, help='Directory where graphs are stored')
+    parser.add_argument('--graphs_dir', default="../data/CLARIFY/results_graphs_january_25", type=str, help='Directory where graphs are stored')
     parser.add_argument('--knn', default=19, type=int, help='KNN used to store graphs')
     parser.add_argument('--pretrained_model_path', type=str, help='Path to pretrained model')
     parser.add_argument('--lr', default=0.0001, type=float, help='Learning rate of the classifier')
@@ -378,12 +395,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Lists of hyperparameters to loop over
-    lrs = [0.01, 0.001, 0.0001, 0.00001, 0.000001]
-    optimizers = ["adam", "sgd"]
+    lrs = [0.01, 0.001, 0.0001, 0.00001, 0.000001] #
+    optimizers = ["adam"] #"sgd"
     owds = [0.01, 0.001, 0.0001, 0.00001, 0.000001]
     epochs = [200, 500]
     batch_sizes = [64, 128, 256]
-    context_awareness = ["CA", "NCA"]
+    context_awareness = ["NCA"]
 
 
     # Generate all combinations of lrs, optimizers, owds, epochs, and batch_sizes
