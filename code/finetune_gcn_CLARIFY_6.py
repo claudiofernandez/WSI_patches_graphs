@@ -486,7 +486,7 @@ def monte_carlo_cv_with_validation(
                         mlflow.log_metrics({
                             f"val_{criterion}": current_val_metric,
                             f"val_loss": val_metrics['loss'],
-                            f"train_loss": accumulated_loss,
+                            f"train_loss": loss,
                             "epoch": epoch
                         }, step=epoch)
 
@@ -514,7 +514,7 @@ def monte_carlo_cv_with_validation(
                             mlflow.log_metrics({
                                 "best_epoch": best_epoch,
                                 f"best_val_{criterion}": current_val_metric
-                            })
+                            }, step=epoch)
                         else:
                             patience_counter += 1
 
