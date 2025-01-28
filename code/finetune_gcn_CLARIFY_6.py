@@ -483,6 +483,13 @@ def monte_carlo_cv_with_validation(
 
                         current_val_metric = val_metrics['auc'] if criterion == 'auc' else val_metrics['f1']
 
+                        mlflow.log_metrics({
+                            f"val_{criterion}": current_val_metric,
+                            f"val_loss": val_metrics['loss'],
+                            f"train_loss": accumulated_loss,
+                            "epoch": epoch
+                        }, step=epoch)
+
                         # Save best validation model and confusion matrix
                         if current_val_metric > best_val_metric:
                             best_val_metric = current_val_metric
@@ -504,6 +511,10 @@ def monte_carlo_cv_with_validation(
                                 val_cm_path,
                                 f"validation_cm/repeat_{repeat + 1}/fold_{fold_idx + 1}"
                             )
+                            mlflow.log_metrics({
+                                "best_epoch": best_epoch,
+                                f"best_val_{criterion}": current_val_metric
+                            })
                         else:
                             patience_counter += 1
 
