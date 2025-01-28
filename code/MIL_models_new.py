@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GATConv, GCNConv, global_mean_pool, global_max_pool
+from torch_geometric.nn import GATConv, GCNConv, global_mean_pool, global_max_pool, GINConv, GENConv
 from torch_geometric.nn import LayerNorm
 
 
@@ -52,6 +52,29 @@ class ImprovedPatchGCN(torch.nn.Module):
                     concat=True,
                     dropout=dropout
                 )
+            elif gnn_layer_type == 'GINConv':
+                # GINConv requires an MLP as the internal transformation
+                gin_mlp = nn.Sequential(
+                    nn.Linear(curr_dim, curr_dim),
+                    nn.BatchNorm1d(curr_dim),
+                    nn.GELU(),
+                    nn.Linear(curr_dim, curr_dim)
+                )
+                layer_dict['conv'] = GINConv(gin_mlp)
+            elif gnn_layer_type == 'GENConv':
+                layer_dict['conv'] = GENConv(
+                    curr_dim,
+                    curr_dim,
+                    aggr='softmax',
+                    t=1.0,
+                    learn_t=True,
+                    num_layers=2,
+                    norm='layer'
+                )
+            else:
+                raise ValueError(f"Unsupported GNN layer type: {gnn_layer_type}")
+
+            # Common l
 
             layer_dict.update({
                 'norm': LayerNorm(curr_dim),
