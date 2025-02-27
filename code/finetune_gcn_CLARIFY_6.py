@@ -421,6 +421,7 @@ def monte_carlo_cv_with_validation(
                     "Criterion": criterion,
                     "Class Weights": class_weights_bool,
                     "GCN Layer Type": model_params['gnn_layer_type'],
+                    "NLayers": model_params['num_layers'],
                     "Pooling": model_params['pooling'],
                     "Task": fe_taskname,
                     "Repeat": repeat + 1,
@@ -591,7 +592,7 @@ def parse_slurm_arguments():
     parser = argparse.ArgumentParser()
 
     # MLflow parameters
-    parser.add_argument("--mlflow_experiment_name", default="[28012025] Fine-tune GCN on new CLARIFY Graphs MIL FE new", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[27022025] Fine-tune GCN on new CLARIFY Graphs MIL FE new", type=str,
                         help='Name for experiment in MLFlow')
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
@@ -671,7 +672,7 @@ def main():
         "num_features": 512,
         "pooling": args.graph_pooling,
         "include_edge_features": args.include_edge_features,
-        "gnn_layer_type": args.gcn_layer_type,
+        "gnn_layer_type": args.gcn_layer_type
     }
 
     # Retrieve KNN Used
