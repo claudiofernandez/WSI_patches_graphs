@@ -519,7 +519,7 @@ def monte_carlo_cv_with_validation(
                         else:
                             patience_counter += 1
 
-                        if early_stopping and patience_counter >= 20:
+                        if early_stopping and patience_counter >= 5:
                             print(f'Early stopping triggered at epoch {epoch}')
                             break
 
