@@ -430,7 +430,13 @@ def monte_carlo_cv_with_validation(
                 })
 
                 # Initialize model, optimizer, and scheduler
-                model = ImprovedPatchGCN(**model_params).to('cuda')
+                # model = ImprovedPatchGCN(**model_params).to('cuda')
+
+
+                from MIL_models import PatchGCN_MeanMax_LSelec
+                model = PatchGCN_MeanMax_LSelec(**model_params).to('cuda')
+
+
                 optimizer = get_optimizer(model, optimizer_type, lr, optimizer_weight_decay)
                 if scheduler:
                     scheduler = OneCycleLR(
@@ -592,7 +598,7 @@ def parse_slurm_arguments():
     parser = argparse.ArgumentParser()
 
     # MLflow parameters
-    parser.add_argument("--mlflow_experiment_name", default="[06042025] Fine-tune GCN on new CLARIFY Graphs MIL FE new", type=str,
+    parser.add_argument("--mlflow_experiment_name", default="[27052025] Fine-tune GCN on new CLARIFY Graphs MIL FE new", type=str,
                         help='Name for experiment in MLFlow')
     parser.add_argument('--mlflow_server_url', type=str, default="http://158.42.170.104:8002", help='URL of MLFlow DB')
 
@@ -664,17 +670,29 @@ def main():
         "OTHERvsTNBC": {"Other": 0, "TNBC": 1}
     }
 
-    # Prepare model parameters
+   # # Prepare model parameters
+   #  model_params = {
+   #      "dropout": args.drop_out,
+   #      "n_classes": None,  # Will be set based on task
+   #      "num_layers": args.num_gcn_layers,
+   #      "num_features": 512,
+   #      "pooling": args.graph_pooling,
+   #      "include_edge_features": args.include_edge_features,
+   #      "gnn_layer_type": args.gcn_layer_type
+   #  }
+
+    # ✅ Por esto (parámetros para PatchGCN_MeanMax_LSelec):
     model_params = {
-        "dropout": args.drop_out,
-        "n_classes": None,  # Will be set based on task
-        "num_layers": args.num_gcn_layers,
-        "num_features": 512,
+        "input_dim": 512,  # ✅ Correcto - coincide con tus features
+        "n_classes": None,
+        "num_layers": args.num_gcn_layers + 1,
+        "hidden_dim": 128,
+        "dropout": 0.25,
         "pooling": args.graph_pooling,
         "include_edge_features": args.include_edge_features,
-        "gnn_layer_type": args.gcn_layer_type
+        "gnn_layer_type": args.gcn_layer_type,
+        "num_features": 512  # ✅ AGREGAR este parámetro
     }
-
     # Retrieve KNN Used
     knn = args.knn
 
