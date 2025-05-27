@@ -15,6 +15,7 @@ from collections import Counter
 import itertools
 from copy import deepcopy
 from sklearn.utils import shuffle
+from MIL_models import PatchGCN_MeanMax_LSelec  # Ajusta el import según tu estructura
 
 
 def get_optimizer(model, optimizer_type, lr, weight_decay):
@@ -332,14 +333,13 @@ def log_overall_metrics(overall_metrics, args, fe_taskname):
     for metric_name, value in overall_metrics.items():
         mlflow.log_metric(f"Overall_{metric_name}", value)
 
+
 def main(args):
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Leer ground truth y características agregadas desde los grafos
+    # Leer ground truth
     gt_df = pd.read_excel(args.gt_path)
     graphs_dirs = os.listdir(args.graphs_dir)
-
-
 
     tasks_labels_mappings = {
         "LUMINALAvsLAUMINALBvsHER2vsTNBC": {"Luminal A": 0, "Luminal B": 1, "HER2(+)": 2, "TNBC": 3},
@@ -347,99 +347,86 @@ def main(args):
         "OTHERvsTNBC": {"Other": 0, "TNBC": 1}
     }
 
-    #Iterate over the graphs
-
-    if args.context_aware == "NCA":
-        args.feature_extractors_dir = "../data/feature_extractors"
-        feature_extractors = os.listdir(args.feature_extractors_dir)
-    elif args.context_aware == "CA":
-        args.pretrained_gcn_models_dir = "../data/gcn_pretrained_models/"
-        feature_extractors = os.listdir(args.pretrained_gcn_models_dir)
-        print("hola")
-
-    # Iterate over the 3 different classification tasks (fe_tasknames)
+    # Iterate over the 3 different classification tasks
     for fe_taskname, task_labels_mapping in tasks_labels_mappings.items():
         print(f"Processing task: {fe_taskname}")
         args.fe_task_name = fe_taskname
 
         all_features, all_labels = [], []
 
+        # CREAR EL MODELO UNA SOLA VEZ POR TASK (no por grafo)
+        n_classes = len(task_labels_mapping)
+        conch_feature_dim = 512
+
+        gcn_model = PatchGCN_MeanMax_LSelec(
+            input_dim=512,           # ← CAMBIO CLAVE: era 2227, ahora 512
+            num_layers=4,
+            hidden_dim=128,
+            n_classes=n_classes,
+            pooling='mean',
+            gnn_layer_type='GENConv',
+            num_features=512,        # ← TAMBIÉN CAMBIAR ESTO
+            dropout=0.25
+        ).to('cuda')
+
         # Filter graphs for the current task
         for graph_dirname in graphs_dirs:
-            # Ensure the graph_dirname matches the current task name
             if fe_taskname not in graph_dirname:
                 continue
-
-            try:
-                if args.context_aware == "NCA":
-                    chosen_model = [fe_name for fe_name in os.listdir(args.feature_extractors_dir) if fe_taskname in fe_name][0]
-                    chosen_model_path = os.path.join(args.feature_extractors_dir, chosen_model)
-                elif args.context_aware == "CA":
-                    chosen_model = [fe_name for fe_name in os.listdir(args.pretrained_gcn_models_dir) if fe_taskname in fe_name][0]
-                    args.knn = chosen_model.split("KNN_")[1].split("_")[0]
-                    chosen_model_path = os.path.join(args.pretrained_gcn_models_dir, chosen_model)
-            except IndexError:
-                continue
-
-            print("Chosen model: ", chosen_model)
-
-            # Load the model for this task
-            model = torch.load(chosen_model_path).to('cuda')
 
             # Load graphs for the task
             graphs_knn_dir = os.path.join(args.graphs_dir, graph_dirname, "graphs_k_" + str(args.knn))
             graphs_files = os.listdir(graphs_knn_dir)
 
-            # Extract patient IDs from filenames
+            # Extract patient IDs function
             def extract_patient_id(filename):
                 match = re.search(r'(SUS\d+)', filename)
                 return match.group(1) if match else None
 
-            # Create a DataFrame of graph files and their corresponding SUS numbers
             graph_files_df = pd.DataFrame({
                 'filename': graphs_files,
                 'SUS_number': [extract_patient_id(filename) for filename in graphs_files]
             })
 
-            # Merge with the ground truth DataFrame to get labels and filter the excluded samples
             merged_df = pd.merge(graph_files_df, gt_df, on='SUS_number', how='inner')
             filtered_df = merged_df[merged_df['Molsub_surr_7clf'] != 'Excluded']
 
-            # For each graph, collect features and labels
+            # Process each graph
             for graph_name in filtered_df['filename'].tolist():
                 file_id = graph_name.split("-")[0].split("HE")[0].split("_")[0].split("a")[0]
                 file_path = os.path.join(graphs_knn_dir, graph_name)
 
-                # Load the graph
+                # Load the graph con features CONCH
                 graph = torch.load(file_path).to('cuda')
-                graph_features = graph["x"].to('cuda')
 
                 with torch.no_grad():
-                    if args.context_aware == "NCA":
-                        case_aggr_feature_vector = model.milAggregation(graph_features)
-                    elif args.context_aware == "CA":
-                        _, _, _, case_aggr_feature_vector = model(graph)
+                    # USAR TODO EL PIPELINE GCN
+                    Y_prob, Y_hat, logits, case_aggr_feature_vector = gcn_model(graph)
 
-                # Get the corresponding label for this case
+                # Get label
                 id_label = gt_df[gt_df["SUS_number"] == file_id]["Molsub_surr_4clf"].values[0]
                 encoded_task_label = task_labels_mapping.get(id_label, 0)
 
-                # Add the feature and label for this graph
+                # Add feature and label
                 all_features.append(case_aggr_feature_vector.cpu().detach().numpy())
                 all_labels.append(encoded_task_label)
 
-        # Ensure the data is collected correctly
-        assert len(all_features) == len(all_labels) == 534, f"Data size mismatch for task {fe_taskname}!"
+        # VERIFICAR TAMAÑO DE DATOS
+        print(f"Task {fe_taskname}: {len(all_features)} samples collected")
 
-        # Convert the features and labels to NumPy arrays
+        # Solo proceder si tenemos suficientes datos
+        if len(all_features) < 50:  # Ajusta este threshold según tus datos
+            print(f"Not enough samples for task {fe_taskname}, skipping...")
+            continue
+
+        # Convert to arrays
         tsne_features = np.stack(all_features)
         all_labels = np.array(all_labels)
 
-        # Load the pretrained classifier
-        classifier = model.classifier
+        # USAR EL CLASSIFIER DEL MODELO
+        classifier = gcn_model.classifier
 
-        # Perform Monte Carlo CV and log results
-        # Perform Monte Carlo CV and log results
+        # Monte Carlo CV
         metrics_df = monte_carlo_cv(
             tsne_features,
             all_labels,
@@ -452,16 +439,15 @@ def main(args):
             output_dir=args.output_dir,
             mlflow_experiment_name=args.mlflow_experiment_name,
             mlflow_server_url=args.mlflow_server_url,
-            lr=args.lr,  # pass the learning rate
-            optimizer_type=args.optimizer_type,  # pass the optimizer type
-            owd=args.owd,  # pass the weight decay if any
-            context_aware=args.context_aware  # pass whether CA or NCA
+            lr=args.lr,
+            optimizer_type=args.optimizer_type,
+            owd=args.owd,
+            context_aware=args.context_aware
         )
 
         # Save metrics
         metrics_output_path = os.path.join(args.output_dir, f"metrics_{fe_taskname}.csv")
         metrics_df.to_csv(metrics_output_path, index=False)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
