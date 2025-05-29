@@ -56,11 +56,12 @@ def find_models_flexible(directory, task_name, model_type="model"):
     return []
 
 
-def plot_nca_ca_tsne_comparison(
+def plot_nca_ca_conch_tsne_comparison(
         gt_path="../data/CLARIFY/ground_truth/CBDC_4_may2024_gt_extended.xlsx",
         graphs_dir="../data/CLARIFY/results_graphs_january_25",
         mil_models_dir="../data/feature_extractors",
         gcn_models_dir="../data/gcn_pretrained_models",
+        conch_graphs_base_dir="../data/CLARIFY/results_graphs_january_25/graphs_CONCH",  # Direct path to CONCH
         output_dir="./tsne_plots",
         task_name="LUMINALAvsLUMINALBvsHER2vsTNBC",
         knn=25,
@@ -68,14 +69,15 @@ def plot_nca_ca_tsne_comparison(
         random_state=42
 ):
     """
-    Create t-SNE plots comparing NCA (MIL) and CA (GCN) feature representations
+    Create t-SNE plots comparing NCA (MIL), CA (GCN), and CONCH (Foundation) feature representations
     for WSI-level features extracted from graph data.
 
     Args:
         gt_path: Path to ground truth Excel file
-        graphs_dir: Directory containing graph data
+        graphs_dir: Directory containing graph data with BCNB backbone features
         mil_models_dir: Directory containing pretrained MIL models
         gcn_models_dir: Directory containing pretrained GCN models
+        conch_graphs_base_dir: Base directory for CONCH graphs (e.g., .../graphs_CONCH)
         output_dir: Directory to save plots
         task_name: Classification task name
         knn: KNN value for graph construction
@@ -116,13 +118,15 @@ def plot_nca_ca_tsne_comparison(
 
     print(f"Processing task: {task_name}")
 
-    # Handle different spelling patterns in MIL vs GCN models
+    # Handle spelling error in BOTH MIL and GCN model filenames, and find CONCH graphs
     mil_task_name = task_name
     gcn_task_name = task_name
+    conch_task_name = task_name
 
     if task_name == "LUMINALAvsLUMINALBvsHER2vsTNBC":
         mil_task_name = "LUMINALAvsLAUMINALBvsHER2vsTNBC"  # MIL models use LAUMINAL
         gcn_task_name = "LUMINALAvsLUMINALBvsHER2vsTNBC"  # GCN models use LUMINAL
+        conch_task_name = "LUMINALAvsLUMINALBvsHER2vsTNBC"  # CONCH uses LUMINAL like GCN
 
     # Find models using specific corrected names
     mil_models = find_models_flexible(mil_models_dir, mil_task_name, "MIL")
@@ -136,8 +140,41 @@ def plot_nca_ca_tsne_comparison(
     mil_model_path = os.path.join(mil_models_dir, mil_models[0])
     gcn_model_path = os.path.join(gcn_models_dir, gcn_models[0])
 
+    # Find CONCH graph directory - use the same approach as your working script
+    conch_graph_patterns = [
+        f"graphs_PM_{conch_task_name}_BB_CONCH",
+        f"graphs_PM_{gcn_task_name}_BB_CONCH",  # Try GCN naming
+        f"graphs_PM_{mil_task_name}_BB_CONCH"  # Try MIL naming
+    ]
+
+    conch_subdirs = []
+    for pattern in conch_graph_patterns:
+        matching_dirs = [d for d in os.listdir(conch_graphs_base_dir) if pattern in d]
+        if matching_dirs:
+            conch_subdirs = matching_dirs
+            print(f"Found CONCH directory with pattern: {pattern}")
+            break
+
+    if not conch_subdirs:
+        # Debug: show what directories are available
+        available_dirs = os.listdir(conch_graphs_base_dir)
+        print(f"Available CONCH directories: {available_dirs}")
+        print(f"Tried patterns: {conch_graph_patterns}")
+
+        # Try a more flexible search
+        conch_subdirs = [d for d in available_dirs if
+                         "CONCH" in d and any(task_part in d for task_part in ["LUMINAL", "HER2", "TNBC"])]
+        if conch_subdirs:
+            print(f"Found CONCH directory with flexible search: {conch_subdirs[0]}")
+        else:
+            raise ValueError(f"Could not find CONCH graph directory. Available: {available_dirs}")
+
+    conch_graphs_knn_dir = os.path.join(conch_graphs_base_dir, conch_subdirs[0], f"graphs_k_{knn}")
+
     print(f"MIL model: {mil_models[0]}")
     print(f"GCN model: {gcn_models[0]}")
+    print(f"CONCH graphs directory: {conch_subdirs[0]}")
+    print(f"CONCH graphs path: {conch_graphs_knn_dir}")
 
     # Load models
     mil_model = torch.load(mil_model_path).to('cuda')
@@ -157,8 +194,16 @@ def plot_nca_ca_tsne_comparison(
     graphs_knn_dir = os.path.join(graphs_dir, graph_dirs[0], f"graphs_k_{knn}")
     graph_files = os.listdir(graphs_knn_dir)
 
-    print(f"Using graphs directory: {graph_dirs[0]}")
-    print(f"Found {len(graph_files)} graph files")
+    print(f"Using BCNB graphs directory: {graph_dirs[0]}")
+    print(f"Found {len(graph_files)} BCNB graph files")
+
+    # Get CONCH graph files
+    if os.path.exists(conch_graphs_knn_dir):
+        conch_graph_files = os.listdir(conch_graphs_knn_dir)
+        print(f"Found {len(conch_graph_files)} CONCH graph files")
+    else:
+        print(f"Warning: CONCH graphs directory does not exist: {conch_graphs_knn_dir}")
+        conch_graph_files = []
 
     # Extract patient IDs
     def extract_patient_id(filename):
@@ -177,9 +222,31 @@ def plot_nca_ca_tsne_comparison(
 
     print(f"Processing {len(filtered_df)} samples")
 
+    # Debug: Check if the filtered samples match available CONCH graphs
+    if conch_graph_files:
+        filtered_graph_names = set(filtered_df['filename'].tolist())
+        available_conch_files = set(conch_graph_files)
+
+        print(f"\nDEBUG - Sample matching:")
+        print(f"Filtered samples: {len(filtered_graph_names)}")
+        print(f"Available CONCH graphs: {len(available_conch_files)}")
+        print(f"Matching files: {len(filtered_graph_names.intersection(available_conch_files))}")
+
+        # Show some examples
+        sample_filtered = list(filtered_graph_names)[:3]
+        sample_conch = list(available_conch_files)[:3]
+        print(f"Sample filtered filenames: {sample_filtered}")
+        print(f"Sample CONCH filenames: {sample_conch}")
+
+        if len(filtered_graph_names.intersection(available_conch_files)) == 0:
+            print("ERROR: No matching files between filtered samples and CONCH graphs!")
+            print("This means the CONCH graphs were generated for different samples.")
+            return None, None, None, None
+
     # Extract features
     nca_features = []
     ca_features = []
+    conch_features = []
     all_labels = []
     patient_ids = []
 
@@ -188,18 +255,32 @@ def plot_nca_ca_tsne_comparison(
             graph_name = row['filename']
             patient_id = row['SUS_number']
 
-            # Load graph
+            # Load BCNB backbone graph
             file_path = os.path.join(graphs_knn_dir, graph_name)
             graph = torch.load(file_path).to('cuda')
             graph_features = graph["x"].to('cuda')
 
-            # Extract NCA features (MIL aggregation)
+            # Extract NCA features (MIL aggregation with BCNB backbone)
             nca_feature = mil_model.milAggregation(graph_features)
             nca_features.append(nca_feature.cpu().numpy())
 
-            # Extract CA features (GCN forward pass)
+            # Extract CA features (GCN forward pass with BCNB backbone)
             _, _, _, ca_feature = gcn_model(graph)
             ca_features.append(ca_feature.cpu().numpy())
+
+            # Load CONCH graph and extract features
+            conch_graph_path = os.path.join(conch_graphs_knn_dir, graph_name)
+            if os.path.exists(conch_graph_path):
+                conch_graph = torch.load(conch_graph_path).to('cuda')
+                conch_graph_features = conch_graph["x"].to('cuda')
+
+                # Extract CONCH features using MIL aggregation
+                conch_feature = mil_model.milAggregation(conch_graph_features)
+                conch_features.append(conch_feature.cpu().numpy())
+            else:
+                # If CONCH graph doesn't exist, use zeros as placeholder
+                conch_features.append(np.zeros_like(nca_feature.cpu().numpy()))
+                print(f"Warning: CONCH graph not found for {graph_name}")
 
             # Get label
             label_str = row['Molsub_surr_4clf']
@@ -210,13 +291,15 @@ def plot_nca_ca_tsne_comparison(
     # Convert to numpy arrays
     nca_features = np.vstack(nca_features)
     ca_features = np.vstack(ca_features)
+    conch_features = np.vstack(conch_features)
     all_labels = np.array(all_labels)
 
     print(f"NCA features shape: {nca_features.shape}")
     print(f"CA features shape: {ca_features.shape}")
+    print(f"CONCH features shape: {conch_features.shape}")
     print(f"Labels shape: {all_labels.shape}")
 
-    # Compute t-SNE
+    # Compute t-SNE for all three approaches
     print("Computing t-SNE for NCA features...")
     tsne_nca = TSNE(n_components=2, perplexity=perplexity, random_state=random_state, n_jobs=-1)
     nca_2d = tsne_nca.fit_transform(nca_features)
@@ -225,8 +308,12 @@ def plot_nca_ca_tsne_comparison(
     tsne_ca = TSNE(n_components=2, perplexity=perplexity, random_state=random_state, n_jobs=-1)
     ca_2d = tsne_ca.fit_transform(ca_features)
 
-    # Create plots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+    print("Computing t-SNE for CONCH features...")
+    tsne_conch = TSNE(n_components=2, perplexity=perplexity, random_state=random_state, n_jobs=-1)
+    conch_2d = tsne_conch.fit_transform(conch_features)
+
+    # Create plots - now with 3 subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(30, 8))
 
     # Plot NCA (MIL) features
     for label_idx, label_name in labels.items():
@@ -250,16 +337,30 @@ def plot_nca_ca_tsne_comparison(
                         c=colors[label_idx], label=f'{label_name} (n={np.sum(mask)})',
                         alpha=0.7, s=50)
 
-    ax2.set_title(f'CA (GCN + Attention) - {task_name}', fontsize=14, fontweight='bold')
+    ax2.set_title(f'CA (GCN) - {task_name}', fontsize=14, fontweight='bold')
     ax2.set_xlabel('t-SNE Component 1', fontsize=12)
     ax2.set_ylabel('t-SNE Component 2', fontsize=12)
     ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax2.grid(True, alpha=0.3)
 
+    # Plot CONCH (Foundation Model) features
+    for label_idx, label_name in labels.items():
+        mask = all_labels == label_idx
+        if np.any(mask):
+            ax3.scatter(conch_2d[mask, 0], conch_2d[mask, 1],
+                        c=colors[label_idx], label=f'{label_name} (n={np.sum(mask)})',
+                        alpha=0.7, s=50)
+
+    ax3.set_title(f'CONCH (Foundation Model + MIL) - {task_name}', fontsize=14, fontweight='bold')
+    ax3.set_xlabel('t-SNE Component 1', fontsize=12)
+    ax3.set_ylabel('t-SNE Component 2', fontsize=12)
+    ax3.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax3.grid(True, alpha=0.3)
+
     plt.tight_layout()
 
     # Save plot
-    output_path = os.path.join(output_dir, f'tsne_comparison_{task_name}_knn{knn}.png')
+    output_path = os.path.join(output_dir, f'tsne_comparison_3way_{task_name}_knn{knn}.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.savefig(output_path.replace('.png', '.pdf'), bbox_inches='tight')
 
@@ -274,11 +375,13 @@ def plot_nca_ca_tsne_comparison(
         'nca_tsne_x': nca_2d[:, 0],
         'nca_tsne_y': nca_2d[:, 1],
         'ca_tsne_x': ca_2d[:, 0],
-        'ca_tsne_y': ca_2d[:, 1]
+        'ca_tsne_y': ca_2d[:, 1],
+        'conch_tsne_x': conch_2d[:, 0],
+        'conch_tsne_y': conch_2d[:, 1]
     })
 
     # Save results
-    results_path = os.path.join(output_dir, f'tsne_results_{task_name}_knn{knn}.csv')
+    results_path = os.path.join(output_dir, f'tsne_results_3way_{task_name}_knn{knn}.csv')
     results_df.to_csv(results_path, index=False)
     print(f"Results saved to: {results_path}")
 
@@ -286,32 +389,56 @@ def plot_nca_ca_tsne_comparison(
     print("\n--- Feature Analysis ---")
     print(f"NCA feature statistics: mean={nca_features.mean():.4f}, std={nca_features.std():.4f}")
     print(f"CA feature statistics: mean={ca_features.mean():.4f}, std={ca_features.std():.4f}")
+    print(f"CONCH feature statistics: mean={conch_features.mean():.4f}, std={conch_features.std():.4f}")
 
     # Calculate silhouette scores (requires scikit-learn)
     try:
         from sklearn.metrics import silhouette_score
         nca_silhouette = silhouette_score(nca_2d, all_labels)
         ca_silhouette = silhouette_score(ca_2d, all_labels)
+        conch_silhouette = silhouette_score(conch_2d, all_labels)
         print(f"\nSilhouette Scores (higher = better clustering):")
         print(f"NCA (MIL): {nca_silhouette:.4f}")
         print(f"CA (GCN): {ca_silhouette:.4f}")
+        print(f"CONCH (Foundation): {conch_silhouette:.4f}")
     except ImportError:
         print("Scikit-learn not available for silhouette score calculation")
 
-    return results_df, nca_features, ca_features
+    return results_df, nca_features, ca_features, conch_features
 
 
 # Example usage
 if __name__ == "__main__":
-    # Run for quaternary classification
-    # results_df, nca_feat, ca_feat = plot_nca_ca_tsne_comparison(
-    #     task_name="LUMINALAvsLUMINALBvsHER2vsTNBC",
-    #     knn=25,
-    #     perplexity=20
-    # )
 
+    print("TASK: " + "LUMINALAvsLUMINALBvsHER2vsTNBC")
+    # Run for quaternary classification with all three approaches
+    results_df4, nca_feat4, ca_feat4, conch_feat4 = plot_nca_ca_conch_tsne_comparison(
+        task_name="LUMINALAvsLUMINALBvsHER2vsTNBC",
+        conch_graphs_base_dir="../data/CLARIFY/results_graphs_january_25/graphs_CONCH",
+        # Direct path like your working script
+        knn=25,
+        perplexity=30
+    )
+
+    print("TASK: " + "LUMINALSvsHER2vsTNBC")
+    results_df3, nca_feat3, ca_feat3, conch_feat3 = plot_nca_ca_conch_tsne_comparison(
+        task_name="LUMINALSvsHER2vsTNBC",
+        conch_graphs_base_dir="../data/CLARIFY/results_graphs_january_25/graphs_CONCH",
+        # Direct path like your working script
+        knn=25,
+        perplexity=30
+    )
+
+    print("TASK: " + "OTHERvsTNBC")
+
+
+    results_df2, nca_feat2, ca_feat2, conch_feat2 = plot_nca_ca_conch_tsne_comparison(
+        task_name="OTHERvsTNBC",
+        conch_graphs_base_dir="../data/CLARIFY/results_graphs_january_25/graphs_CONCH",
+        # Direct path like your working script
+        knn=25,
+        perplexity=30
+    )
     # Optionally run for other tasks
-    plot_nca_ca_tsne_comparison(task_name="LUMINALSvsHER2vsTNBC", knn=25, perplexity=20)
-    plot_nca_ca_tsne_comparison(task_name="OTHERvsTNBC", knn=25, perplexity=20)
-
-    print("hola")
+    # plot_nca_ca_conch_tsne_comparison(task_name="LUMINALSvsHER2vsTNBC", conch_graphs_base_dir="../data/CLARIFY/results_graphs_january_25/graphs_CONCH", knn=25)
+    # plot_nca_ca_conch_tsne_comparison(task_name="OTHERvsTNBC", knn=25)
